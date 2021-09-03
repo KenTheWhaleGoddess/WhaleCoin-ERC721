@@ -34,12 +34,12 @@ contract SimpleCollectible is ERC721, Ownable {
 
     function createCollectiblesForPresale(uint256 _count) public payable {
         require(presaleIsOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
-        require(!presaleIsComplete(), "Presale is over. See wenSale for more info");
+        require(! presaleIsComplete(), "Presale is over. See wenSale for more info");
 
         require(_count <= _maxPerTx, "Cant mint more than _maxPerTx");
         require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
-        require((_count +tokenCounter) <= _presaleSupply, "Ran out of NFTs!");
-        require(msg.value >= (_presalePrice * _count), "Ether value sent is not correct");
+        require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs!");
+        require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
 
         createCollectibles(_count);
     }
@@ -72,11 +72,12 @@ contract SimpleCollectible is ERC721, Ownable {
     }
 
     function wenPresale() public view returns (string memory) {
-        return presaleIsOpen() ? "now" : "#soon";
+        if(!presaleIsOpen()) return "#soon";
+        return presaleIsComplete() ? "complete" : "now!";
     }
 
     function wenSale() public view returns (string memory) {
-        return saleIsOpen() ? "now" : "#soon";
+        return saleIsOpen() ? "now!" : "#soon";
     }
 
     function saleIsOpen() public view returns (bool) {
