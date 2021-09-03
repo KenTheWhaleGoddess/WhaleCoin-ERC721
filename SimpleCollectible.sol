@@ -13,19 +13,15 @@ contract SimpleCollectible is ERC721, Ownable {
     uint256 public _price = 50000000000000000; // .05 ETH
 
     uint256 public _maxPerTx = 10; // Set to one higher than actual, to save gas on lte/gte checks.
-    
-    uint256 public _presaleTime = 1629757800; // In the past
-    uint256 public _saleTime = 1630695403; // 	Fri Sep 03 2021 18:56:43 PST
 
     uint256 public _presaleSupply = 3;
-    uint256 public _supply = 5; 
+    uint256 public _supply = 9; 
 
     string private _baseTokenURI;
+    uint private _saleState; // 0 - No sale. 1 - Presale. 2 - Main Sale.
 
     // Faciliating the needed functionality for the presale
     mapping(address => bool) addressToPreSaleEntry;
-    
-    
 
     // Optional mapping for token URIs
     mapping (uint256 => string) private _tokenURIs;
@@ -33,12 +29,15 @@ contract SimpleCollectible is ERC721, Ownable {
 
     constructor () ERC721 ("WhaleCoin","WHALE")  {
         tokenCounter = 0;
+        _saleState = 0;
     }
 
     function createCollectiblesForPresale(uint256 _count) public payable {
-        require(presaleIsOpen(), "Presale is not yet open");
-        require(_count <= _maxPerTx, "Cant mint more than mintMax");
-        require(isWalletInPresale(msg.sender), "Wallet isnt in presale! Doh!");
+        require(presaleIsOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
+        require(!presaleIsComplete(), "Presale is over. See wenSale for more info");
+
+        require(_count <= _maxPerTx, "Cant mint more than _maxPerTx");
+        require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
         require((_count +tokenCounter) <= _presaleSupply, "Ran out of NFTs!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is not correct");
 
@@ -72,20 +71,31 @@ contract SimpleCollectible is ERC721, Ownable {
         return _maxPerTx;
     }
 
-    function wenPresale() public view returns (uint256) {
-        return _presaleTime;
+    function wenPresale() public view returns (string memory) {
+        return presaleIsOpen() ? "now" : "#soon";
     }
 
-    function wenSale() public view returns (uint256) {
-        return _saleTime;
+    function wenSale() public view returns (string memory) {
+        return saleIsOpen() ? "now" : "#soon";
     }
 
     function saleIsOpen() public view returns (bool) {
-        return (block.timestamp >= _saleTime);
+        return _saleState == 2;
     }
 
     function presaleIsOpen() public view returns (bool) {
-        return (block.timestamp >= _presaleTime);
+        return (_saleState >= 1);
+    }
+    function presaleIsComplete() public view returns (bool) {
+        return tokenCounter < (_presaleSupply - 1);
+    }
+    
+    function getSaleState() private view returns (uint){
+        return _saleState;
+    }
+    
+    function setSaleState(uint saleState) public onlyOwner {
+        _saleState = saleState;
     }
 
     function isWalletInPresale(address _address) public view returns (bool) {
@@ -94,6 +104,8 @@ contract SimpleCollectible is ERC721, Ownable {
     function addWalletToPreSale(address _address) public onlyOwner {
         addressToPreSaleEntry[_address] = true;
     }
+    
+    
 
     function _setTokenURI(uint256 tokenId, string memory _tokenURI) internal virtual {
         require(_exists(tokenId), "ERC721Metadata: URI set of nonexistent token");
@@ -103,6 +115,9 @@ contract SimpleCollectible is ERC721, Ownable {
         _baseTokenURI = baseURI;
     }
 
+    function getBaseURI() public view returns (string memory){
+        return _baseTokenURI;
+    }
     function _baseURI() internal view virtual override returns (string memory) {
         return _baseTokenURI;
     }
