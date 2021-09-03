@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <link rel="stylesheet" type="text/css" href="main.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/web3/1.5.2/web3.min.js" integrity="sha512-mYc+D+NmmyR0Gcrzyae7q5HguBCS4cBHAsIk7gGhu0/ZyGg4z2YZDjyR2YQA/IMCMTNs4mnlw3vVdERzewpekQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script></head>
+<body>
+    <div class="container">
+        <h1>Coursetro Instructor</h1>
+        <label for="sizeOfMint" class="col-lg-2 control-label">Mint 1-10 NFTs</label>
+        <input id="sizeOfMint" type="int">
+        <button id="saleButton">Click here for official sale!</button>
+        <button id="presaleButton">Click here for official presale!</button>
+        <div id="errMsg"></div>
+
+    </div>
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script>
+        if (typeof web3 !== 'undefined') {
+            web3 = new Web3(web3.currentProvider);
+        } else {
+            // set the provider you want from Web3.providers
+            web3 = new Web3(new Web3.providers.HttpProvider("http://localhost:8545"));
+        }    
+        web3.eth.defaultCommon = {customChain: {name: 'custom-network', chainId: 1, networkId: 1}, baseChain: 'mainnet', hardfork: 'petersburg'};
+
+        web3.eth.defaultAccount = web3.eth.accounts[0];
+        var Contract = new web3.eth.Contract([
+            {
+                "anonymous": false,
+                "inputs": [
+                    {
+                        "indexed": true,
+                        "internalType": "address",
+                        "name": "previousOwner",
+                        "type": "address"
+                    },
+                    {
+                        "indexed": true,
+                        "internalType": "address",
+                        "name": "newOwner",
+                        "type": "address"
+                    }
+                ],
+                "name": "OwnershipTransferred",
+                "type": "event"
+            },
+            {
+                "inputs": [],
+                "name": "owner",
+                "outputs": [
+                    {
+                        "internalType": "address",
+                        "name": "",
+                        "type": "address"
+                    }
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "renounceOwnership",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {
+                        "internalType": "address",
+                        "name": "newOwner",
+                        "type": "address"
+                    }
+                ],
+                "name": "transferOwnership",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            }
+        ], '0x641dC1DD6399B38d1862F91C4CB5e312f76E8EBA');
+        
+        var result = Contract.at('0x641dC1DD6399B38d1862F91C4CB5e312f76E8EBA');
+        console.log(result);
+
+
+        $('#saleButton').click(function() {            
+            if (!result.presaleIsComplete()) {
+                errImg.innerHtml += "Sorry, presale is complete";
+                return;
+            }
+            if (!result.presaleIsOpen()) {
+                errImg.innerHtml += "Sorry, presale has not begun";
+                return;
+            }
+
+            if(result.isWalletInPresale(web3.eth.accounts[0])) {
+                result.createCollectiblesForSale($("#sizeOfMint").val());
+                return;
+            } 
+            errMsg.innerHTML += "Your wallet"+ web3.eth.accounts[0] +" is not in presale.";
+        })
+        
+        $('#presaleButton').click(function() {
+             result.createCollectiblesForPresale($("#sizeOfMint").val())
+        })
+        </script>
+</body>
+</html>
