@@ -10,7 +10,7 @@ contract SimpleCollectible is ERC721, Ownable {
     uint256 public tokenCounter;
 
     uint256 public _presalePrice = 10000000000000000; //.01 ETH
-    uint256 public _price = 50000000000000000; // .05 ETH
+    uint256 public _salePrice = 50000000000000000; // .05 ETH
 
     uint256 public _maxPerTx = 10; // Set to one higher than actual, to save gas on lte/gte checks.
 
@@ -48,7 +48,7 @@ contract SimpleCollectible is ERC721, Ownable {
         require(saleIsOpen(), "Sale is not yet open");
         require(_count <= _maxPerTx, "Cant mint more than mintMax");
         require((_count +tokenCounter) <= _supply, "Ran out of NFTs! Sry!");
-        require(msg.value >= (_presalePrice * _count), "Ether value sent is not correct");
+        require(msg.value >= (_salePrice * _count), "Ether value sent is not correct");
 
         createCollectibles(_count);
     }
