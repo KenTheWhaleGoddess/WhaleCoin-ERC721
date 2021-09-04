@@ -6,12 +6,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 
 contract SimpleCollectible is ERC721, Ownable {
-    uint256 public tokenCounter;
+    uint256 private tokenCounter;
 
-    uint256 public _presalePrice = 10000000000000000; //.01 ETH
-    uint256 public _salePrice = 50000000000000000; // .05 ETH
+    uint256 private _presalePrice = 10000000000000000; //.01 ETH
+    uint256 private _salePrice = 50000000000000000; // .05 ETH
 
-    uint256 public _maxPerTx = 10; // Set to one higher than actual, to save gas on lte/gte checks.
+    uint256 private _maxPerTx = 11; // Set to one higher than actual, to save gas on <= checks.
 
     uint256 public _presaleSupply = 3;
     uint256 public _totalSupply = 9; 
@@ -27,11 +27,11 @@ contract SimpleCollectible is ERC721, Ownable {
         _saleState = 0;
     }
 
-    function mintCollectiblesForPresale(uint256 _count) public payable {
+    function mintPresaleCollectibles(uint256 _count) public payable {
         require(isPresaleOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
         require(!isPresaleComplete(), "Presale is over. See wenSale for more info");
 
-        require(_count <= _maxPerTx, "Cant mint more than _maxPerTx");
+        require(_count < _maxPerTx, "Cant mint more than _maxPerTx");
         require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
         require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
@@ -39,10 +39,10 @@ contract SimpleCollectible is ERC721, Ownable {
         createCollectibles(_count);
     }
 
-    function mintCollectiblesForSale(uint256 _count) public payable {
+    function mintCollectibles(uint256 _count) public payable {
         require(isSaleOpen(), "Sale is not yet open");
         require(isPresaleComplete(), "Presale has not started or is ongoing");
-        require(_count <= _maxPerTx, "Cant mint more than mintMax");
+        require(_count < _maxPerTx, "Cant mint more than mintMax");
         require((_count + tokenCounter) <= _totalSupply, "Ran out of NFTs for sale! Sry!");
         require(msg.value >= (_salePrice * _count), "Ether value sent is not correct");
 
@@ -56,14 +56,12 @@ contract SimpleCollectible is ERC721, Ownable {
     }
 
     function createCollectible() private {
-            uint256 newItemId = tokenCounter;
-
-            _safeMint(msg.sender, newItemId);
+            _safeMint(msg.sender, tokenCounter);
             tokenCounter = tokenCounter + 1;
     }
 
-    function mintsRemaining() public view returns (uint) {
-        return _totalSupply - tokenCounter;
+    function tokensMinted() public view returns (uint256) {
+        return tokenCounter;
     }
     
     function saleInstructionsForNoobs() public view returns (string memory) {
@@ -85,6 +83,10 @@ contract SimpleCollectible is ERC721, Ownable {
             return "Presale has not started. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nwenPresale will say now! when presale is active.";
         }
     }
+    
+    function minted() public view returns (uint256) {
+        return tokenCounter;
+    }
 
     function wenPresale() public view returns (string memory) {
         if(!isPresaleOpen()) return "#soon";
@@ -101,8 +103,7 @@ contract SimpleCollectible is ERC721, Ownable {
     }
 
     function isSaleComplete() public view returns (bool) {
-        return tokenCounter >= _totalSupply;
-
+        return tokenCounter == _totalSupply;
     }
     function isPresaleOpen() public view returns (bool) {
         return _saleState >= 1;
@@ -118,6 +119,21 @@ contract SimpleCollectible is ERC721, Ownable {
     function setSaleState(uint saleState) public onlyOwner {
         _saleState = saleState;
     }
+    
+    function getSalePrice() private view returns (uint){
+        return _salePrice;
+    }
+    
+    function setSalePrice(uint salePrice) public onlyOwner {
+        _salePrice = salePrice;
+    }
+    function getPresalePrice() private view returns (uint){
+        return _presalePrice;
+    }
+    
+    function setPresalePrice(uint presalePrice) public onlyOwner {
+        _presalePrice = presalePrice;
+    }
 
     function isWalletInPresale(address _address) public view returns (bool) {
         return addressToPreSaleEntry[_address];
@@ -131,9 +147,6 @@ contract SimpleCollectible is ERC721, Ownable {
     }
 
     function getBaseURI() public view returns (string memory){
-        return _baseTokenURI;
-    }
-    function _baseURI() internal view virtual override returns (string memory) {
         return _baseTokenURI;
     }
     function withdrawAll() public payable onlyOwner {
