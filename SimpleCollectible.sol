@@ -14,17 +14,13 @@ contract SimpleCollectible is ERC721, Ownable {
     uint256 public _maxPerTx = 10; // Set to one higher than actual, to save gas on lte/gte checks.
 
     uint256 public _presaleSupply = 3;
-    uint256 public _supply = 9; 
+    uint256 public _totalSupply = 9; 
 
     string private _baseTokenURI;
     uint private _saleState; // 0 - No sale. 1 - Presale. 2 - Main Sale.
 
     // Faciliating the needed functionality for the presale
     mapping(address => bool) addressToPreSaleEntry;
-
-    // Optional mapping for token URIs
-    mapping (uint256 => string) private _tokenURIs;
-
 
     constructor () ERC721 ("WhaleCoin","WHALE")  {
         tokenCounter = 0;
@@ -47,7 +43,7 @@ contract SimpleCollectible is ERC721, Ownable {
         require(isSaleOpen(), "Sale is not yet open");
         require(isPresaleComplete(), "Presale has not started or is ongoing");
         require(_count <= _maxPerTx, "Cant mint more than mintMax");
-        require((_count +tokenCounter) <= _supply, "Ran out of NFTs for sale! Sry!");
+        require((_count + tokenCounter) <= _totalSupply, "Ran out of NFTs for sale! Sry!");
         require(msg.value >= (_salePrice * _count), "Ether value sent is not correct");
 
         createCollectibles(_count);
@@ -63,8 +59,31 @@ contract SimpleCollectible is ERC721, Ownable {
             uint256 newItemId = tokenCounter;
 
             _safeMint(msg.sender, newItemId);
-            _setTokenURI(newItemId, tokenURI(newItemId));
             tokenCounter = tokenCounter + 1;
+    }
+
+    function mintsRemaining() public view returns (uint) {
+        return _totalSupply - tokenCounter;
+    }
+    
+    function saleInstructionsForNoobs() public view returns (string memory) {
+        if (isSaleOpen() && !isSaleComplete()) {
+            return "Sale is currently ongoing. \nEveryone is eligible for main sale.\nWhen calling the mint function, input ETH equal to the sale price .05 ETH * n (Number of NFTs).";
+        } else if (isSaleComplete()){
+            return "Sale is complete. Please find us on OpenSea or other.";
+        } else {
+            return "Sale has not started. \n wenSale will say now! when sale is active.";
+        }
+    }
+    
+    function presaleInstructionsForNoobs() public view returns (string memory) {
+        if (isPresaleOpen() && !isPresaleComplete()) {
+            return "Presale is currently ongoing. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nWhen calling the mint function, input ETH equal to the presale price .01 ETH * n (Number of NFTs).";
+        } else if (isPresaleComplete()){
+            return "Presale is complete. Head to the function saleInstructionsForDummies for Main Sale instructions.";
+        } else {
+            return "Presale has not started. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nwenPresale will say now! when presale is active.";
+        }
     }
 
     function wenPresale() public view returns (string memory) {
@@ -73,13 +92,18 @@ contract SimpleCollectible is ERC721, Ownable {
     }
 
     function wenSale() public view returns (string memory) {
-        return isSaleOpen() ? "now!" : "#soon";
+        if(!isSaleOpen()) return "#soon";
+        return isSaleComplete() ? "complete" : "now!";
     }
 
     function isSaleOpen() public view returns (bool) {
         return _saleState == 2;
     }
 
+    function isSaleComplete() public view returns (bool) {
+        return tokenCounter >= _totalSupply;
+
+    }
     function isPresaleOpen() public view returns (bool) {
         return _saleState >= 1;
     }
@@ -102,11 +126,6 @@ contract SimpleCollectible is ERC721, Ownable {
         addressToPreSaleEntry[_address] = true;
     }
     
-
-    function _setTokenURI(uint256 tokenId, string memory _tokenURI) internal virtual {
-        require(_exists(tokenId), "ERC721Metadata: URI set of nonexistent token");
-        _tokenURIs[tokenId] = _tokenURI;
-    }
     function setBaseURI(string memory baseURI) public onlyOwner {
         _baseTokenURI = baseURI;
     }
