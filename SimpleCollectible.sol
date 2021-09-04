@@ -1,6 +1,5 @@
 //"SPDX-License-Identifier: UNLICENSED"
 pragma solidity ^0.8.7;
-pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -32,22 +31,23 @@ contract SimpleCollectible is ERC721, Ownable {
         _saleState = 0;
     }
 
-    function createCollectiblesForPresale(uint256 _count) public payable {
-        require(presaleIsOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
-        require(! presaleIsComplete(), "Presale is over. See wenSale for more info");
+    function mintCollectiblesForPresale(uint256 _count) public payable {
+        require(isPresaleOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
+        require(!isPresaleComplete(), "Presale is over. See wenSale for more info");
 
         require(_count <= _maxPerTx, "Cant mint more than _maxPerTx");
         require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
-        require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs!");
+        require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
 
         createCollectibles(_count);
     }
 
-    function createCollectiblesForSale(uint256 _count) public payable {
-        require(saleIsOpen(), "Sale is not yet open");
+    function mintCollectiblesForSale(uint256 _count) public payable {
+        require(isSaleOpen(), "Sale is not yet open");
+        require(isPresaleComplete(), "Presale has not started or is ongoing");
         require(_count <= _maxPerTx, "Cant mint more than mintMax");
-        require((_count +tokenCounter) <= _supply, "Ran out of NFTs! Sry!");
+        require((_count +tokenCounter) <= _supply, "Ran out of NFTs for sale! Sry!");
         require(msg.value >= (_salePrice * _count), "Ether value sent is not correct");
 
         createCollectibles(_count);
@@ -67,28 +67,24 @@ contract SimpleCollectible is ERC721, Ownable {
             tokenCounter = tokenCounter + 1;
     }
 
-    function getMaxMintsPerTransaction() public view returns (uint256) {
-        return _maxPerTx;
-    }
-
     function wenPresale() public view returns (string memory) {
-        if(!presaleIsOpen()) return "#soon";
-        return presaleIsComplete() ? "complete" : "now!";
+        if(!isPresaleOpen()) return "#soon";
+        return isPresaleComplete() ? "complete" : "now!";
     }
 
     function wenSale() public view returns (string memory) {
-        return saleIsOpen() ? "now!" : "#soon";
+        return isSaleOpen() ? "now!" : "#soon";
     }
 
-    function saleIsOpen() public view returns (bool) {
+    function isSaleOpen() public view returns (bool) {
         return _saleState == 2;
     }
 
-    function presaleIsOpen() public view returns (bool) {
-        return (_saleState >= 1);
+    function isPresaleOpen() public view returns (bool) {
+        return _saleState >= 1;
     }
-    function presaleIsComplete() public view returns (bool) {
-        return tokenCounter < (_presaleSupply - 1);
+    function isPresaleComplete() public view returns (bool) {
+        return tokenCounter >= _presaleSupply;
     }
     
     function getSaleState() private view returns (uint){
@@ -105,7 +101,6 @@ contract SimpleCollectible is ERC721, Ownable {
     function addWalletToPreSale(address _address) public onlyOwner {
         addressToPreSaleEntry[_address] = true;
     }
-    
     
 
     function _setTokenURI(uint256 tokenId, string memory _tokenURI) internal virtual {
