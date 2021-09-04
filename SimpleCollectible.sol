@@ -31,7 +31,7 @@ contract SimpleCollectible is ERC721, Ownable {
         require(isPresaleOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
         require(!isPresaleComplete(), "Presale is over. See wenSale for more info");
 
-        require(_count < _maxPerTx, "Cant mint more than _maxPerTx");
+        require(_count < _maxPerTx, "Cant mint more than mintMax");
         require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
         require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
@@ -86,6 +86,9 @@ contract SimpleCollectible is ERC721, Ownable {
     
     function minted() public view returns (uint256) {
         return tokenCounter;
+    }
+    function maxMintsPerTransaction() public view returns (uint) {
+        return _maxPerTx - 1; //_maxPerTx is off by 1 for require checks in HOF Mint. Allows use of < instead of <=, less gas
     }
 
     function wenPresale() public view returns (string memory) {
