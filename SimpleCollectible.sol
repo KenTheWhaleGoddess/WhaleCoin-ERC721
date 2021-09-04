@@ -80,7 +80,7 @@ contract SimpleCollectible is ERC721, Ownable {
         if (isPresaleOpen() && !isPresaleComplete()) {
             return "Presale is currently ongoing. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nWhen calling the mint function, input ETH equal to the presale price .01 ETH * n (Number of NFTs).";
         } else if (isPresaleComplete()){
-            return "Presale is complete. Head to the function saleInstructionsForDummies for Main Sale instructions.";
+            return "Presale is complete. Head to the function saleInstructionsForNoobs for Main Sale instructions.";
         } else {
             return "Presale has not started. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nwenPresale will say now! when presale is active.";
         }
