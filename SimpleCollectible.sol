@@ -66,21 +66,21 @@ contract SimpleCollectible is ERC721, Ownable {
     
     function saleInstructionsForNoobs() public view returns (string memory) {
         if (isSaleOpen() && !isSaleComplete()) {
-            return "Sale is currently ongoing. \nEveryone is eligible for main sale.\nWhen calling the mint function, input ETH equal to the sale price .05 ETH * n (Number of NFTs).";
+            return "Sale is currently ongoing. Everyone is eligible for main sale. When calling the mint function, input ETH equal to the sale price .05 ETH * n (Number of NFTs).";
         } else if (isSaleComplete()){
             return "Sale is complete. Please find us on OpenSea or other.";
         } else {
-            return "Sale has not started. \n wenSale will say now! when sale is active.";
+            return "Sale has not started. wenSale will say now! when sale is active. Check if presale is active! ";
         }
     }
     
     function presaleInstructionsForNoobs() public view returns (string memory) {
         if (isPresaleOpen() && !isPresaleComplete()) {
-            return "Presale is currently ongoing. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nWhen calling the mint function, input ETH equal to the presale price .01 ETH * n (Number of NFTs).";
+            return "Presale is currently ongoing. Check if your wallet is eligible for presale using isWalletInPresale. When calling the mint function, input ETH equal to the presale price .01 ETH * n (Number of NFTs).";
         } else if (isPresaleComplete()){
             return "Presale is complete. Head to the function saleInstructionsForNoobs for Main Sale instructions.";
         } else {
-            return "Presale has not started. \nCheck if your wallet is eligible for presale using isWalletInPresale.\nwenPresale will say now! when presale is active.";
+            return "Presale has not started. Check if your wallet is eligible for presale using isWalletInPresale. wenPresale will say now! when presale is active.";
         }
     }
     
