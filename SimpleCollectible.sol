@@ -106,15 +106,8 @@ contract SimpleCollectible is ERC721, Ownable {
         return _salePrice;
     }
     
-    function setSalePrice(uint salePrice) public onlyOwner {
-        _salePrice = salePrice;
-    }
     function getPresalePrice() private view returns (uint){
         return _presalePrice;
-    }
-    
-    function setPresalePrice(uint presalePrice) public onlyOwner {
-        _presalePrice = presalePrice;
     }
 
     function isWalletInPresale(address _address) public view returns (bool) {
