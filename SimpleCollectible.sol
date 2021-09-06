@@ -9,13 +9,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract SimpleCollectible is ERC721, Ownable {
     uint256 public tokenCounter;
 
-    uint256 private _presalePrice = 10000000000000000; //.01 ETH
+    uint256 private _presalePrice = 0; //.00 ETH
     uint256 private _salePrice = 50000000000000000; // .05 ETH
 
-    uint256 private _maxPerTx = 11; // Set to one higher than actual, to save gas on <= checks.
+    uint256 private _maxPerTx = 21; // Set to one higher than actual, to save gas on <= checks.
 
-    uint256 public _presaleSupply = 3;
-    uint256 public _totalSupply = 9; 
+    uint256 public _presaleSupply = 100;
+    uint256 public _totalSupply = 10000; 
 
     string private _baseTokenURI;
     uint private _saleState; // 0 - No sale. 1 - Presale. 2 - Main Sale.
@@ -23,7 +23,7 @@ contract SimpleCollectible is ERC721, Ownable {
     // Faciliating the needed functionality for the presale
     mapping(address => bool) addressToPreSaleEntry;
 
-    constructor () ERC721 ("WhaleCoin","WHALE")  {
+    constructor () ERC721 ("Signals in the Noise","PERLIN")  {
         tokenCounter = 0;
         _saleState = 0;
     }
@@ -32,13 +32,10 @@ contract SimpleCollectible is ERC721, Ownable {
         require(isPresaleOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
         require(!isPresaleComplete(), "Presale is over. See wenSale for more info");
 
-        require(_count < _maxPerTx, "Cant mint more than mintMax");
         require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
         require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
 
-
-        addressToPreSaleEntry[msg.sender] = false;
         createCollectibles(_count);
     }
 
