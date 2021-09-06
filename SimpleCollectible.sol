@@ -1,12 +1,13 @@
 //"SPDX-License-Identifier: UNLICENSED"
 pragma solidity ^0.8.7;
+pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 
 contract SimpleCollectible is ERC721, Ownable {
-    uint256 private tokenCounter;
+    uint256 public tokenCounter;
 
     uint256 private _presalePrice = 10000000000000000; //.01 ETH
     uint256 private _salePrice = 50000000000000000; // .05 ETH
@@ -36,9 +37,17 @@ contract SimpleCollectible is ERC721, Ownable {
         require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
         require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
 
+
+        addressToPreSaleEntry[msg.sender] = false;
         createCollectibles(_count);
     }
 
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+
+
+        return string(abi.encodePacked(getBaseURI(), Strings.toString(tokenId)));
+    }
     function mintCollectibles(uint256 _count) public payable {
         require(isSaleOpen(), "Sale is not yet open");
         require(isPresaleComplete(), "Presale has not started or is ongoing");
@@ -59,34 +68,7 @@ contract SimpleCollectible is ERC721, Ownable {
             _safeMint(msg.sender, tokenCounter);
             tokenCounter = tokenCounter + 1;
     }
-
-    function tokensMinted() public view returns (uint256) {
-        return tokenCounter;
-    }
     
-    function saleInstructionsForNoobs() public view returns (string memory) {
-        if (isSaleOpen() && !isSaleComplete()) {
-            return "Sale is currently ongoing. Everyone is eligible for main sale. When calling the mint function, input ETH equal to the sale price .05 ETH * n (Number of NFTs).";
-        } else if (isSaleComplete()){
-            return "Sale is complete. Please find us on OpenSea or other.";
-        } else {
-            return "Sale has not started. wenSale will say now! when sale is active. Check if presale is active! ";
-        }
-    }
-    
-    function presaleInstructionsForNoobs() public view returns (string memory) {
-        if (isPresaleOpen() && !isPresaleComplete()) {
-            return "Presale is currently ongoing. Check if your wallet is eligible for presale using isWalletInPresale. When calling the mint function, input ETH equal to the presale price .01 ETH * n (Number of NFTs).";
-        } else if (isPresaleComplete()){
-            return "Presale is complete. Head to the function saleInstructionsForNoobs for Main Sale instructions.";
-        } else {
-            return "Presale has not started. Check if your wallet is eligible for presale using isWalletInPresale. wenPresale will say now! when presale is active.";
-        }
-    }
-    
-    function minted() public view returns (uint256) {
-        return tokenCounter;
-    }
     function maxMintsPerTransaction() public view returns (uint) {
         return _maxPerTx - 1; //_maxPerTx is off by 1 for require checks in HOF Mint. Allows use of < instead of <=, less gas
     }
