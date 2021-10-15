@@ -14,9 +14,10 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 	using SafeMath for uint256;
 
 	uint256 constant public BASE_RATE = 100 ether; 
-	// Tue Mar 18 2031 17:46:47 GMT+0000
 	uint256 public START = block.timestamp;
     uint256 public MAX = 100000 ether;
+    
+    uint256 public INITIAL_LIQUID = 20 ether;
 
 	
     uint256 public total = 0 ether;
@@ -30,12 +31,6 @@ contract YieldToken is ERC20("Noise", "NOISE") {
     	signals = IBase(_signals);
 	}
 
-
-	function min(uint256 a, uint256 b) internal pure returns (uint256) {
-		return a < b ? a : b;
-	}
-
-
 	function max(uint256 a, uint256 b) internal pure returns (uint256) {
 		return a > b ? a : b;
 	}
@@ -43,8 +38,14 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 
 	function getReward(address _user) external {
 	    require(total < MAX, "no more mints!");
-		uint256 pending = getTotalClaimable(_user);
+	    uint256 pending;
+	    if (lastUpdate[_user] == 0) {
+    		pending = getTotalClaimable(_user) + INITIAL_LIQUID;
 
+	    } else {
+	        pending =  getTotalClaimable(_user);
+	    }
+        
 		if (pending > 0) {
 		    if (total + pending > MAX) {
 		        uint256 remaining = MAX - total;
@@ -67,5 +68,3 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 		return pending;
 	}
 }
-
-
