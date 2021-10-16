@@ -19,11 +19,12 @@ contract YieldToken is ERC20("Noise", "NOISE") {
     
     uint256 public INITIAL_LIQUID = 20 ether;
 
-	
     uint256 public total = 0 ether;
 
 	mapping(address => uint256) public lastUpdate;
-	
+	mapping(address => uint256) public lastBalance;
+
+
 	IBase public signals;
 
 
@@ -35,13 +36,11 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 		return a > b ? a : b;
 	}
 
-
-	function getReward(address _user) external {
+	function getReward(address _user) public {
 	    require(total < MAX, "no more mints!");
 	    uint256 pending;
 	    if (lastUpdate[_user] == 0) {
     		pending = getTotalClaimable(_user) + INITIAL_LIQUID;
-
 	    } else {
 	        pending =  getTotalClaimable(_user);
 	    }
@@ -57,14 +56,20 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 		    }
 		}
 		lastUpdate[_user] = block.timestamp;
-
+		lastBalance[_user] = signals.balanceOf(_user);
 	}
 
 	function getTotalClaimable(address _user) public view returns(uint256) {
 		uint256 time = block.timestamp;
 		uint256 start = max(START, lastUpdate[_user]);
-
-		uint256 pending = signals.balanceOf(_user).mul(BASE_RATE.mul((time.sub(start)))).div(86400);
-		return pending;
+		uint256 pending;
+        if (lastBalance[_user] == 0) {
+            pending = signals.balanceOf(_user).mul(BASE_RATE.mul((time.sub(start)))).div(86400);
+        } else {
+            pending = lastBalance[_user].mul(BASE_RATE.mul((time.sub(start)))).div(86400);
+        }
+        
+        return pending;
 	}
+	
 }
