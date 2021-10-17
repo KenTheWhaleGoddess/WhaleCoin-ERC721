@@ -5,24 +5,26 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
 
 interface IBase {
 	function balanceOf(address _user) external view returns(uint256);
 }
 
-contract YieldToken is ERC20("Noise", "NOISE") {
+contract YieldToken is Ownable, ERC20("Noise", "NOISE") {
 	using SafeMath for uint256;
 
-	uint256 constant public BASE_RATE = 100 ether; 
+	uint256 public BASE_RATE = 3 ether; 
 	uint256 public START = block.timestamp;
-    uint256 public MAX = 100000 ether;
+    uint256 public MAX = 600000 ether;
     
-    uint256 public INITIAL_LIQUID = 20 ether;
-
     uint256 public total = 0 ether;
 
 	mapping(address => uint256) public lastUpdate;
 	mapping(address => uint256) public lastBalance;
+	
+	mapping(address => bool) public initialLiquidClaimed;
 
 
 	IBase public signals;
@@ -35,15 +37,17 @@ contract YieldToken is ERC20("Noise", "NOISE") {
 	function max(uint256 a, uint256 b) internal pure returns (uint256) {
 		return a > b ? a : b;
 	}
+	
+	
+	function min(uint256 a, uint256 b) internal pure returns (uint256) {
+		return a < b ? a : b;
+	}
 
 	function getReward(address _user) public {
 	    require(total < MAX, "no more mints!");
-	    uint256 pending;
-	    if (lastUpdate[_user] == 0) {
-    		pending = getTotalClaimable(_user) + INITIAL_LIQUID;
-	    } else {
-	        pending =  getTotalClaimable(_user);
-	    }
+	    require(signals.balanceOf(_user) > 0, "No signals!");
+	    uint256 pending =  getTotalClaimable(_user);
+
         
 		if (pending > 0) {
 		    if (total + pending > MAX) {
@@ -66,10 +70,17 @@ contract YieldToken is ERC20("Noise", "NOISE") {
         if (lastBalance[_user] == 0) {
             pending = signals.balanceOf(_user).mul(BASE_RATE.mul((time.sub(start)))).div(86400);
         } else {
-            pending = lastBalance[_user].mul(BASE_RATE.mul((time.sub(start)))).div(86400);
+            pending = min(lastBalance[_user], signals.balanceOf(_user)).mul(BASE_RATE.mul((time.sub(start)))).div(86400);
         }
         
         return pending;
 	}
 	
+	function setBaseRate(uint256 base) public onlyOwner {
+	    BASE_RATE = base;
+	}
+	
+	function setMaxTokens(uint256 max) public onlyOwner {
+	    MAX = max;
+	}
 }
