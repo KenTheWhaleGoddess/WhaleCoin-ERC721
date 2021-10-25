@@ -32,7 +32,7 @@ contract MintPass is ERC721, Ownable {
     mapping(ICollectible => bool) trustedCollectibles;
     mapping(ICollectible => mapping(uint256 => bool)) mintClaimed;
 
-    constructor () ERC721 ("Signals in the Noise","PERLIN")  {
+    constructor () ERC721("WhaleGoddess Mint Pass","WGMP") {
         tokenCounter = 0;
         _saleState = 0;
     }
