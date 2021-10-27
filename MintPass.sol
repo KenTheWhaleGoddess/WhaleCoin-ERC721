@@ -4,8 +4,6 @@ pragma solidity ^0.8.7;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-
-
 interface ICollectible {
 	function mintWithWGPass(address _user) external;
 } 
@@ -13,26 +11,20 @@ interface ICollectible {
 contract MintPass is ERC721, Ownable {
     uint256 public tokenCounter;
 
-    uint256 private _presalePrice = 0; //.00 ETH
     uint256 private _salePrice = 50000000000000000; // .05 ETH
 
-    uint256 private _maxPerTx = 21; // Set to one higher than actual, to save gas on <= checks.
+    uint256 private _maxPerTx = 6; // Set to one higher than actual, to save gas on <= checks.
 
-    uint256 public _presaleSupply = 20;
     uint256 public _totalSupply = 100; 
 
     string private _baseTokenURI;
-    uint private _saleState; // 0 - No sale. 1 - Presale. 2 - Main Sale.
+    uint private _saleState; // 0 - No sale. 1 - Main Sale.
 
-    // Faciliating the needed functionality for the presale
-    mapping(address => bool) addressToPreSaleEntry;
-    
-    
     // Faciliating the needed functionality for the Mint Pass
     mapping(ICollectible => bool) trustedCollectibles;
     mapping(ICollectible => mapping(uint256 => bool)) mintClaimed;
 
-    constructor () ERC721("WhaleGoddess Mint Pass","WGMP") {
+    constructor () ERC721 ("WhaleGoddess Mint Pass","WGMP")  {
         tokenCounter = 0;
         _saleState = 0;
     }
@@ -50,20 +42,8 @@ contract MintPass is ERC721, Ownable {
         }
     }
 
-    function presaleMint(uint256 _count) public payable {
-        require(isPresaleOpen(), "Presale is not yet open. See wenPresale and wenSale for more info");
-        require(!isPresaleComplete(), "Presale is over. See wenSale for more info");
-
-        require(isWalletInPresale(msg.sender), "Wallet isnt in presale! The owner needs to addWalletToPresale.");
-        require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
-        require(msg.value >= (_presalePrice * _count), "Ether value sent is too low");
-
-        createCollectibles(_count);
-    }
-
     function mint(uint256 _count) public payable {
         require(isSaleOpen(), "Sale is not yet open");
-        require(isPresaleComplete(), "Presale has not started or is ongoing");
         require(_count < _maxPerTx, "Cant mint more than mintMax");
         require((_count + tokenCounter) <= _totalSupply, "Ran out of NFTs for sale! Sry!");
         require(msg.value >= (_salePrice * _count), "Ether value sent is not correct");
@@ -72,7 +52,7 @@ contract MintPass is ERC721, Ownable {
     }
 
     function ownerMint(uint256 _count) public onlyOwner {
-        require((_count + tokenCounter) <= _presaleSupply, "Ran out of NFTs for presale! Sry!");
+        require((_count + tokenCounter) <= _totalSupply, "Ran out of NFTs for presale! Sry!");
 
         createCollectibles(_count);
     }
@@ -97,28 +77,17 @@ contract MintPass is ERC721, Ownable {
 
         return getBaseURI();
     }
-    function wenPresale() public view returns (string memory) {
-        if(!isPresaleOpen()) return "#soon";
-        return isPresaleComplete() ? "complete" : "now!";
-    }
-
     function wenSale() public view returns (string memory) {
         if(!isSaleOpen()) return "#soon";
         return isSaleComplete() ? "complete" : "now!";
     }
 
     function isSaleOpen() public view returns (bool) {
-        return _saleState == 2;
+        return _saleState == 1;
     }
 
     function isSaleComplete() public view returns (bool) {
         return tokenCounter == _totalSupply;
-    }
-    function isPresaleOpen() public view returns (bool) {
-        return _saleState >= 1;
-    }
-    function isPresaleComplete() public view returns (bool) {
-        return tokenCounter >= _presaleSupply;
     }
     
     function getSaleState() private view returns (uint){
@@ -133,15 +102,8 @@ contract MintPass is ERC721, Ownable {
         return _salePrice;
     }
     
-    function getPresalePrice() private view returns (uint){
-        return _presalePrice;
-    }
-
-    function isWalletInPresale(address _address) public view returns (bool) {
-        return addressToPreSaleEntry[_address];
-    }
-    function addWalletToPreSale(address _address) public onlyOwner {
-        addressToPreSaleEntry[_address] = true;
+    function setSalePrice(uint256 salePrice) public onlyOwner {
+        _salePrice = salePrice;
     }
     
     function setBaseURI(string memory baseURI) public onlyOwner {
