@@ -34,8 +34,8 @@ contract MintPass is ERC721, Ownable {
     }
     
     function mintTrustedCollectible(ICollectible collectible) public {
-        require(trustedCollectibles[collectible], "untrusted collectible");
-        for(uint256 i = 0; i < _totalSupply; i++) {
+        require(unclaimedCollectibles(collectible) > 0, "None of collectible to mint"); 
+        for(uint256 i = 0; i < tokenCounter; i++) {
             if(msg.sender == ownerOf(i) && !mintClaimed[collectible][i]) {
                 collectible.mintWithWGPass(msg.sender);
                 mintClaimed[collectible][i] = true;
@@ -44,8 +44,9 @@ contract MintPass is ERC721, Ownable {
     }
 
     function unclaimedCollectibles(ICollectible collectible) public view returns (uint256) {
+        require(trustedCollectibles[collectible], "untrusted collectible");
         uint256 inc = 0;
-        for(uint256 i = 0; i < _totalSupply; i++) {
+        for(uint256 i = 0; i < tokenCounter; i++) {
             if(msg.sender == ownerOf(i) && !mintClaimed[collectible][i]) {
                 inc++;
             }
