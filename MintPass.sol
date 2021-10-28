@@ -43,6 +43,17 @@ contract MintPass is ERC721, Ownable {
         }
     }
 
+    function unclaimedCollectibles(ICollectible collectible) public view returns (uint256) {
+        uint256 inc = 0;
+        for(uint256 i = 0; i < _totalSupply; i++) {
+            if(msg.sender == ownerOf(i) && !mintClaimed[collectible][i]) {
+                inc++;
+            }
+        }
+        
+        return inc;
+    }
+
     function mint(uint256 _count) public payable {
         require(isSaleOpen(), "Sale is not yet open");
         require(_count < _maxPerTx, "Cant mint more than mintMax");
