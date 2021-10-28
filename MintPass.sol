@@ -4,7 +4,7 @@ pragma solidity ^0.8.7;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-interface ICollectible {
+interface ICollectible is IERC721 {
 	function mintWithWGPass(address _user) external;
 } 
 
@@ -34,6 +34,7 @@ contract MintPass is ERC721, Ownable {
     }
     
     function mintTrustedCollectible(ICollectible collectible) public {
+        require(trustedCollectibles[collectible], "untrusted collectible");
         for(uint256 i = 0; i < _totalSupply; i++) {
             if(msg.sender == ownerOf(i) && !mintClaimed[collectible][i]) {
                 collectible.mintWithWGPass(msg.sender);
