@@ -3,8 +3,7 @@ pragma solidity ^0.8.7;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
 
 struct VotingData {
     string title;
@@ -12,10 +11,16 @@ struct VotingData {
     
     address payable receiver;
     uint256 amount;
+    uint256 snapshotId;
     
     VoteType voteType;
     address erc20Token;
     Quorum quorum;
+}
+
+interface ERC20Snapshottable {
+    function snapshot() external returns(uint256);
+    function balanceOfAt(address _user, uint256 id) external view virtual returns (uint256);
 }
 
 struct Quorum {
@@ -37,7 +42,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant VOTE_RAISER_ROLE = keccak256("VOTE_RAISER_ROLE");
     
-    ERC20 public votingToken;
+    ERC20Snapshottable public votingToken;
 
     Quorum quorum = Quorum(50, 1000000000000);
     
@@ -45,6 +50,8 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     
     
     mapping(uint256 => VotingData) public voteContent;
+
+    mapping(uint256 => mapping(address => bool)) voted;
 
     mapping(uint256 => uint256) public yay;
     mapping(uint256 => uint256) public nay;
@@ -61,7 +68,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
 
 
     
-    constructor(ERC20 _votingToken) {
+    constructor(ERC20Snapshottable _votingToken) {
         _setupRole(ADMIN_ROLE, msg.sender);
         _setupRole(VOTE_RAISER_ROLE, msg.sender);
         votingToken = _votingToken;
@@ -81,6 +88,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             _voteContent,
             _receiver,
             _amount,
+            votingToken.snapshot(),
             VoteType.MATICSpend,
             address(0),
             quorum
@@ -101,6 +109,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             _voteContent,
             _receiver,
             0,
+            votingToken.snapshot(),
             VoteType.ERC20New,
             _erc20Token,
             quorum
@@ -123,6 +132,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             _voteContent,
             _receiver,
             _amount,
+            votingToken.snapshot(),
             VoteType.ERC20Spend, //isERC20
             _erc20Token,
             quorum
@@ -140,6 +150,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             _voteContent,
             _receiver,
             0,
+            votingToken.snapshot(),
             VoteType.UpdateQuorum, //isERC20
             address(0),
             _newQuorum
@@ -158,7 +169,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         require(voteRaised[voteRaisedIndex], "vote not yet raised!");
         require(voteDecided[voteRaisedIndex] == VoteResult.VoteOpen, "vote already decided!");
         
-        uint256 balanceOf = votingToken.balanceOf(msg.sender);
+        uint256 balanceOf = votingToken.balanceOfAt(msg.sender, voteContent[voteRaisedIndex].snapshotId);
         require(balanceOf > 0, "No voting token!");
         
         
