@@ -67,8 +67,19 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         votingToken = _votingToken;
     }
     
+    function sendETH(uint256 amount) payable public {
+        require (msg.value > 0, "you're paying me nothing!");
+    }
+    
+    function sendERC20Token(address _token, uint256 amount) public {
+        require(enabledERC20Token[_token], "Token disabled!");
+        ERC20(_token).transferFrom(msg.sender, address(this), amount);
+    }
     
     function raiseVoteToSpendETH(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+        require(address(this).balance >= _amount, "Not enough ETH!");
+        require(_amount > 0, "Send something1!");
+        
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
             _voteTitle,
@@ -84,15 +95,16 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         return voteRaisedIndex;
     }
     
-    function raiseVoteToAddERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256) {
+    function raiseVoteToAddERC20Token(address payable _receiver, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256) {
         require(!enabledERC20Token[_erc20Token], "Token already approved!");
+        require(_erc20Token != address(0), "Pls use valid ERC20!");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
             _voteTitle,
             _voteContent,
             _receiver,
-            _amount,
+            0,
             VoteType.ERC20New,
             _erc20Token,
             quorum
@@ -104,6 +116,10 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     
     function raiseVoteToSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
         require(enabledERC20Token[_erc20Token], "Token not approved!");
+        
+        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough ETH!");
+        require(_amount > 0, "Send something!");
+
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
             _voteTitle,
