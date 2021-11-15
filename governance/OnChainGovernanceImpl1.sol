@@ -36,7 +36,7 @@ enum VoteType {
 }
 
 enum VoteResult {
-    VoteOpen, Passed, VetoedByOwner, Discarded
+    VoteOpen, Passed, PassedByOwner, VetoedByOwner, Discarded
 }
 
 contract OnChainGovernanceImpl is AccessControl, Ownable {
@@ -75,10 +75,6 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         _setupRole(ADMIN_ROLE, msg.sender);
         _setupRole(VOTE_RAISER_ROLE, msg.sender);
         votingToken = _votingToken;
-    }
-    
-    function sendMATIC(uint256 amount) public payable  {
-        require (msg.value > 0, "you're paying me nothing!");
     }
     
     function raiseVoteToSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
@@ -202,11 +198,11 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     
     function resolveVote(uint256 voteRaisedIndex) public onlyRole(ADMIN_ROLE) {
         require(voteDecided[voteRaisedIndex] != VoteResult.VoteOpen, "vote is still open!");
-        if(voteDecided[voteRaisedIndex] == VoteResult.Discarded) {
+        if(voteDecided[voteRaisedIndex] == VoteResult.Discarded
+                || voteDecided[voteRaisedIndex] == VoteResult.VetoedByOwner) {
             voteResolved[voteRaisedIndex] = true;
-        } else if (voteDecided[voteRaisedIndex] == VoteResult.VetoedByOwner) {
-            voteResolved[voteRaisedIndex] = true;
-        } else if (voteDecided[voteRaisedIndex] == VoteResult.Passed) {
+        } else if (voteDecided[voteRaisedIndex] == VoteResult.Passed 
+                || voteDecided[voteRaisedIndex] == VoteResult.PassedByOwner ) {
             VotingData memory _data = voteContent[voteRaisedIndex];
             
             if (_data.voteType == VoteType.ERC20New) {
@@ -225,12 +221,24 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     event Yay(VotingData data);
     event Nay(VotingData data);
     
-    function ownerVeto(uint256 proposalIndex) public onlyOwner {
+    function ownerVetoProposal(uint256 proposalIndex) public onlyOwner {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
         
         voteDecided[proposalIndex] = VoteResult.VetoedByOwner;
     }
+    
+    function ownerPassProposal(uint256 proposalIndex) public onlyOwner {
+        require(voteRaised[proposalIndex], "vote not raised!");
+        require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
+        voteDecided[proposalIndex] = VoteResult.PassedByOwner;
+    }
+    
+    function ownerScrub(uint256 id, string memory _title, string memory _content) public onlyOwner {
+        voteContent[id].title = _title;
+        voteContent[id].content = _content;
+    }
+    
     
     function revokeVoteRaiser(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
         revokeRole(VOTE_RAISER_ROLE, _newRaiser);
