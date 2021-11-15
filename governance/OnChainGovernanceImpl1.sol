@@ -7,44 +7,16 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
+import "./OnChainGovernance.sol";
 
-struct VotingData {
-    string title;
-    string content;
-    
-    address payable receiver;
-    uint256 amount;
-    uint256 snapshotId;
-    
-    VoteType voteType;
-    address erc20Token;
-    Quorum quorum;
-}
 
-interface ERC20Snapshottable {
-    function snapshot() external returns(uint256);
-    function balanceOfAt(address _user, uint256 id) external view virtual returns (uint256);
-}
-
-struct Quorum {
-    uint256 quorumPercentage;
-    uint256 staticQuorumTokens;
-    uint256 minVoters;
-}
-
-enum VoteType {
-    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum
-}
-
-enum VoteResult {
-    VoteOpen, Passed, PassedByOwner, VetoedByOwner, Discarded
-}
-
-contract OnChainGovernanceImpl is AccessControl, Ownable {
+contract OnChainGovernanceImpl is OnChainGovernance, AccessControl, Ownable {
     using SafeMath for uint256;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant VOTE_RAISER_ROLE = keccak256("VOTE_RAISER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE"); //whalegoddess
+
     
     uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
     uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 0;
@@ -70,20 +42,22 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
 
     mapping(uint256 => uint256) public totalVotes;
     
-    
     uint256 public voteRaisedIndex;
     mapping(uint256 => bool) public voteRaised;
     mapping(uint256 => VoteResult) public voteDecided;
     mapping(uint256 => bool) public voteResolved;
+    
+    bool paused;
 
     
     constructor(ERC20Snapshottable _votingToken) {
         _setupRole(ADMIN_ROLE, msg.sender);
-        _setupRole(VOTE_RAISER_ROLE, msg.sender);
+        _setupRole(VOTE_RAISER_ROLE, msg.sender); 
+        _setupRole(PAUSER_ROLE, msg.sender);
         votingToken = _votingToken;
     }
     
-    function raiseVoteToSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+    function raiseVoteToSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public override onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
         require(address(this).balance >= _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something1!");
         
@@ -107,9 +81,10 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         return voteRaisedIndex;
     }
     
-    function raiseVoteToAddERC20Token(address payable _receiver, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256) {
+    function raiseVoteToAddERC20Token(address payable _receiver, address _erc20Token, string memory _voteTitle, string memory _voteContent) public override onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256) {
         require(!enabledERC20Token[_erc20Token], "Token already approved!");
         require(_erc20Token != address(0), "Pls use valid ERC20!");
+        require(!paused, "Paused");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -131,10 +106,11 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         return voteRaisedIndex;
     }
     
-    function raiseVoteToSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+    function raiseVoteToSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public override onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
         require(enabledERC20Token[_erc20Token], "Token not approved!");
         require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something!");
+        require(!paused, "Paused");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -156,8 +132,10 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         return voteRaisedIndex;
     }
 
-    function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+    function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public override onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+        require(!paused, "Paused");
         validateQuorum(_newQuorum);
+        
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
             _voteTitle,
@@ -178,13 +156,13 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         return voteRaisedIndex;
     }
     
-    event VoteRaised(VotingData data);
 
     
-    function vote(uint256 voteRaisedIndex, bool _yay, string memory justification) public onlySender {
+    function vote(uint256 voteRaisedIndex, bool _yay, string memory justification) public override onlySender {
         require(voteRaised[voteRaisedIndex], "vote not yet raised!");
         require(!voted[voteRaisedIndex][msg.sender], "Sender already voted");
         require(voteDecided[voteRaisedIndex] == VoteResult.VoteOpen, "vote already decided!");
+        require(!paused, "Paused");
         
         uint256 balanceOf = votingToken.balanceOfAt(msg.sender, voteContent[voteRaisedIndex].snapshotId);
         require(balanceOf > 0, "No voting token!");
@@ -217,7 +195,8 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     
     event Voted(address voter, VoteResult result, string justification);
     
-    function resolveVote(uint256 voteRaisedIndex) public onlyRole(ADMIN_ROLE) {
+    function resolveVote(uint256 voteRaisedIndex) public override onlyRole(ADMIN_ROLE) {
+        require(!paused, "Paused");
         require(voteDecided[voteRaisedIndex] != VoteResult.VoteOpen, "vote is still open!");
         if(voteDecided[voteRaisedIndex] == VoteResult.Discarded
                 || voteDecided[voteRaisedIndex] == VoteResult.VetoedByOwner) {
@@ -239,8 +218,6 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         }
     }       
     
-    event Yay(VotingData data);
-    event Nay(VotingData data);
     
     function validateQuorum(Quorum memory _quorum) public {
         require(_quorum.quorumPercentage <= MAXIMUM_QUORUM_PERCENTAGE
@@ -249,10 +226,9 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         require(_quorum.minVoters >= MINIMUM_QUORUM_VOTERS, "Quorum requires 1 voter");
     }
     
-    event Veto(uint256 id);
-    event ForcePass(uint256 id);
     
-    function ownerVetoProposal(uint256 proposalIndex) public onlyOwner {
+    function ownerVetoProposal(uint256 proposalIndex) public override onlyOwner {
+        require(!paused, "Paused");
         require(voteRaised[proposalIndex], "vote not raised!");
         require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
         
@@ -260,7 +236,8 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         emit Veto(proposalIndex);
     }
     
-    function ownerPassProposal(uint256 proposalIndex) public onlyOwner {
+    function ownerPassProposal(uint256 proposalIndex) public override onlyOwner {
+        require(!paused, "Paused");
         require(voteRaised[proposalIndex], "vote not raised!");
         require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
         
@@ -269,24 +246,32 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     }
 
     function ownerScrub(uint256 id, string memory _title, string memory _content) public onlyOwner {
+        require(!paused, "Paused");
         voteContent[id].title = _title;
         voteContent[id].content = _content;
     }
     
+    function setPaused(bool _paused) public onlyRole(PAUSER_ROLE) {
+        paused = _paused;
+    }
     
     function revokeVoteRaiser(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
+        require(!paused, "Paused");
         revokeRole(VOTE_RAISER_ROLE, _newRaiser);
     }
     
     function revokeAdmin(address _newAdmin) public onlyOwner onlySender {
+        require(!paused, "Paused");
         revokeRole(ADMIN_ROLE, _newAdmin);
     }
     
     function addVoteRaiser(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
+        require(!paused, "Paused");
         _setupRole(VOTE_RAISER_ROLE, _newRaiser);
     }
     
     function addAdmin(address _newAdmin) public onlyOwner onlySender {
+        require(!paused, "Paused");
         _setupRole(ADMIN_ROLE, _newAdmin);
     }
     
