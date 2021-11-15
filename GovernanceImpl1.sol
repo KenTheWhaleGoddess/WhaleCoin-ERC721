@@ -24,7 +24,7 @@ struct Quorum {
 }
 
 enum VoteType {
-    ERC20New, ERC20Spend, ETHSpend, UpdateQuorum
+    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum
 }
 
 enum VoteResult {
@@ -67,17 +67,12 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         votingToken = _votingToken;
     }
     
-    function sendETH(uint256 amount) payable public {
+    function sendMATIC(uint256 amount) payable public {
         require (msg.value > 0, "you're paying me nothing!");
     }
     
-    function sendERC20Token(address _token, uint256 amount) public {
-        require(enabledERC20Token[_token], "Token disabled!");
-        ERC20(_token).transferFrom(msg.sender, address(this), amount);
-    }
-    
-    function raiseVoteToSpendETH(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
-        require(address(this).balance >= _amount, "Not enough ETH!");
+    function raiseVoteToSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+        require(address(this).balance >= _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something1!");
         
         voteRaisedIndex += 1;
@@ -86,12 +81,13 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             _voteContent,
             _receiver,
             _amount,
-            VoteType.ETHSpend,
+            VoteType.MATICSpend,
             address(0),
             quorum
         );
         emit VoteRaised(voteContent[voteRaisedIndex]);
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
         return voteRaisedIndex;
     }
     
@@ -111,13 +107,14 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         );
         emit VoteRaised(voteContent[voteRaisedIndex]);
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
         return voteRaisedIndex;
     }
     
     function raiseVoteToSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
         require(enabledERC20Token[_erc20Token], "Token not approved!");
         
-        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough ETH!");
+        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something!");
 
         voteRaisedIndex += 1;
@@ -132,10 +129,11 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         );
         emit VoteRaised(voteContent[voteRaisedIndex]);
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
         return voteRaisedIndex;
     }
 
-    function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, uint256 _quorumStatic, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
+    function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(VOTE_RAISER_ROLE) onlySender returns (uint256){
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
             _voteTitle,
@@ -148,6 +146,8 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         );
         emit VoteRaised(voteContent[voteRaisedIndex]);
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+
         return voteRaisedIndex;
     }
     
@@ -179,9 +179,10 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             emit Nay(voteContent[voteRaisedIndex]);
             voteDecided[voteRaisedIndex] = VoteResult.Discarded;
         }
-    
+        emit Voted(msg.sender, voteDecided[voteRaisedIndex]);
     }
     
+    event Voted(address voter, VoteResult result);
     
     function resolveVote(uint256 voteRaisedIndex) public onlyRole(ADMIN_ROLE) {
         require(voteDecided[voteRaisedIndex] != VoteResult.VoteOpen, "vote is still open!");
@@ -196,12 +197,11 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
                 enabledERC20Token[_data.erc20Token] = true;
             } else if (_data.voteType == VoteType.ERC20Spend) {
                 ERC20(_data.erc20Token).transfer(_data.receiver, _data.amount);
-            } else if (_data.voteType == VoteType.ETHSpend) {
+            } else if (_data.voteType == VoteType.MATICSpend) {
                 _data.receiver.transfer(_data.amount);
             } else if (_data.voteType == VoteType.UpdateQuorum) {
                 quorum = _data.quorum;
             }
-            
             voteResolved[voteRaisedIndex] = true;
         }
     }       
@@ -233,7 +233,7 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     }
     
     modifier onlySender {
-  require(msg.sender == tx.origin, "No smart contracts");
+      require(msg.sender == tx.origin, "No smart contracts");
       _;
-    }   
+    }     
 }
