@@ -201,6 +201,8 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
             } else if (_data.voteType == VoteType.UpdateQuorum) {
                 quorum = _data.quorum;
             }
+            
+            voteResolved[voteRaisedIndex] = true;
         }
     }       
     
