@@ -29,6 +29,7 @@ interface ERC20Snapshottable {
 struct Quorum {
     uint256 quorumPercentage;
     uint256 staticQuorumTokens;
+    uint256 minVoters;
 }
 
 enum VoteType {
@@ -47,12 +48,14 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     
     uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
     uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 0;
+
+    uint256 public constant MINIMUM_QUORUM_VOTERS = 1;
     
     ERC20Snapshottable public votingToken;
     
     mapping(address => bool) public enabledERC20Token;
 
-    Quorum quorum = Quorum(50, 100);
+    Quorum quorum = Quorum(50, 50, 1);
     mapping(uint256 => Quorum) quorums;
     
     mapping(uint256 => VotingData) public voteContent;
@@ -60,15 +63,17 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     mapping(uint256 => mapping(address => bool)) voted;
 
     mapping(uint256 => uint256) public yay;
+    mapping(uint256 => uint256) public yayCount;
+
     mapping(uint256 => uint256) public nay;
+    mapping(uint256 => uint256) public nayCount;
+
     mapping(uint256 => uint256) public totalVotes;
     
     
     uint256 public voteRaisedIndex;
     mapping(uint256 => bool) public voteRaised;
-    
     mapping(uint256 => VoteResult) public voteDecided;
-    
     mapping(uint256 => bool) public voteResolved;
 
     
@@ -187,21 +192,26 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
         if (_yay) {
             yay[voteRaisedIndex] += balanceOf;
             totalVotes[voteRaisedIndex] += balanceOf;
+            yayCount[voteRaisedIndex] += 1;
         } else {
             nay[voteRaisedIndex] += balanceOf;
             totalVotes[voteRaisedIndex] += balanceOf;
+            nayCount[voteRaisedIndex] += 1;
         }
         
         if (yay[voteRaisedIndex] * 100 > (quorums[voteRaisedIndex].quorumPercentage * totalVotes[voteRaisedIndex])
-                && yay[voteRaisedIndex] > quorums[voteRaisedIndex].staticQuorumTokens) {
+                && yay[voteRaisedIndex] > quorums[voteRaisedIndex].staticQuorumTokens
+                && quorums[voteRaisedIndex].minVoters <= yayCount[voteRaisedIndex]) {
             emit Yay(voteContent[voteRaisedIndex]);
             voteDecided[voteRaisedIndex] = VoteResult.Passed;
         } else if ((nay[voteRaisedIndex] * 100 > (quorums[voteRaisedIndex].quorumPercentage * totalVotes[voteRaisedIndex]))
-                && nay[voteRaisedIndex] > quorums[voteRaisedIndex].staticQuorumTokens) {
+                && nay[voteRaisedIndex] > quorums[voteRaisedIndex].staticQuorumTokens
+                && quorums[voteRaisedIndex].minVoters <= nayCount[voteRaisedIndex]) {
             emit Nay(voteContent[voteRaisedIndex]);
             voteDecided[voteRaisedIndex] = VoteResult.Discarded;
         }
         voted[voteRaisedIndex][msg.sender] = true;
+        
         emit Voted(msg.sender, voteDecided[voteRaisedIndex], justification);
     }
     
@@ -235,25 +245,34 @@ contract OnChainGovernanceImpl is AccessControl, Ownable {
     function validateQuorum(Quorum memory _quorum) public {
         require(_quorum.quorumPercentage <= MAXIMUM_QUORUM_PERCENTAGE
             && _quorum.quorumPercentage >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
+            
+        require(_quorum.minVoters >= MINIMUM_QUORUM_VOTERS, "Quorum requires 1 voter");
     }
+    
+    event Veto(uint256 id);
+    event ForcePass(uint256 id);
     
     function ownerVetoProposal(uint256 proposalIndex) public onlyOwner {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
         
         voteDecided[proposalIndex] = VoteResult.VetoedByOwner;
+        emit Veto(proposalIndex);
     }
     
     function ownerPassProposal(uint256 proposalIndex) public onlyOwner {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(voteDecided[proposalIndex] == VoteResult.VoteOpen, "Vote not open!");
+        
         voteDecided[proposalIndex] = VoteResult.PassedByOwner;
+        emit ForcePass(proposalIndex);
     }
-    
+
     function ownerScrub(uint256 id, string memory _title, string memory _content) public onlyOwner {
         voteContent[id].title = _title;
         voteContent[id].content = _content;
     }
+    
     
     function revokeVoteRaiser(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
         revokeRole(VOTE_RAISER_ROLE, _newRaiser);
