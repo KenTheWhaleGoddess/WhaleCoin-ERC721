@@ -42,6 +42,7 @@ enum VoteResult {
 contract OnChainGovernanceImpl is AccessControl {
     using SafeMath for uint256;
     
+    bytes32 public constant OWNER_ROLE = keccak256("OWNER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant MEMBER_ROLE = keccak256("MEMBER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -87,15 +88,15 @@ contract OnChainGovernanceImpl is AccessControl {
     
     constructor(ERC20Snapshottable _votingToken) {
         owner = msg.sender;
-        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setupRole(OWNER_ROLE, msg.sender);
         _setupRole(ADMIN_ROLE, msg.sender);
         _setupRole(MEMBER_ROLE, msg.sender); 
         _setupRole(PAUSER_ROLE, msg.sender);
         
-        _setRoleAdmin(DEFAULT_ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(MEMBER_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(OWNER_ROLE, OWNER_ROLE);
+        _setRoleAdmin(ADMIN_ROLE, OWNER_ROLE);
+        _setRoleAdmin(MEMBER_ROLE, OWNER_ROLE);
+        _setRoleAdmin(PAUSER_ROLE, OWNER_ROLE);
         votingToken = _votingToken;
     }
     
@@ -283,7 +284,7 @@ contract OnChainGovernanceImpl is AccessControl {
     event Veto(uint256 id);
     event ForcePass(uint256 id);
     
-    function ownerVetoProposal(uint256 proposalIndex) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function ownerVetoProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE) {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
         
@@ -291,7 +292,7 @@ contract OnChainGovernanceImpl is AccessControl {
         emit Veto(proposalIndex);
     }
     
-    function ownerPassProposal(uint256 proposalIndex) public onlyRole(DEFAULT_ADMIN_ROLE)  {
+    function ownerPassProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE)  {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
         
@@ -313,7 +314,7 @@ contract OnChainGovernanceImpl is AccessControl {
         _setupRole(MEMBER_ROLE, _newRaiser);
     }
     
-    function promoteNextOwner(address _nextOwner) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function promoteNextOwner(address _nextOwner) public onlyRole(OWNER_ROLE) {
         require(_nextOwner != owner, "next owner == owner");
         require(_nextOwner != ZEROES, "Must promote valid governance");
         nextOwner = _nextOwner;   
@@ -323,8 +324,8 @@ contract OnChainGovernanceImpl is AccessControl {
         require(msg.sender != owner, "Owner cannot take own ownership");
         require(nextOwner == msg.sender, "Caller not nominated");
         
-        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        revokeRole(DEFAULT_ADMIN_ROLE, owner);
+        _setupRole(OWNER_ROLE, msg.sender);
+        revokeRole(OWNER_ROLE, owner);
         owner = msg.sender;
 
         nextOwner = ZEROES;
