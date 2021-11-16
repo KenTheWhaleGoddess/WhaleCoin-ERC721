@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: None
 
 pragma solidity ^0.8.7;
@@ -19,10 +20,9 @@ struct VotingData {
     Quorum quorum;
 }
 
-interface ERC20SnapshottableAndMintable {
+interface ERC20Snapshottable {
     function snapshot() external returns(uint256);
-    function balanceOfAt(address _user, uint256 _id) external view returns (uint256);
-    function mint(address _user, uint256 _amount) external;
+    function balanceOfAt(address _user, uint256 id) external view returns (uint256);
 }
 
 struct Quorum {
@@ -32,7 +32,7 @@ struct Quorum {
 }
 
 enum VoteType {
-    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum, Mint
+    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum
 }
 
 enum VoteResult {
@@ -58,7 +58,7 @@ contract OnChainGovernanceImpl is AccessControl {
 
     uint256 public constant MINIMUM_BLOCKS_BETWEEN_VOTES = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
 
-    ERC20SnapshottableAndMintable public votingToken;
+    ERC20Snapshottable public votingToken;
     
     mapping(address => bool) public enabledERC20Token;
 
@@ -85,9 +85,8 @@ contract OnChainGovernanceImpl is AccessControl {
     mapping(uint256 => bool) public voteResolved;
     
     bool public paused;
-    bool public mintingEnabled;
     
-    constructor(ERC20SnapshottableAndMintable _votingToken) {
+    constructor(ERC20Snapshottable _votingToken) {
         owner = msg.sender;
         _setupRole(OWNER_ROLE, msg.sender);
         _setupRole(ADMIN_ROLE, msg.sender);
@@ -182,33 +181,7 @@ contract OnChainGovernanceImpl is AccessControl {
         emit VoteRaised(voteContent[voteRaisedIndex]);
         return voteRaisedIndex;
     }
-   function raiseVoteToMint(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
-        require(address(this).balance >= _amount, "Not enough MATIC!");
-        require(_amount > 0, "Mint something1!");
-        require(!paused, "Paused");
-        require(mintingEnabled, "Minting isnt enabled by Owner");
-        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES), "Vote too soon!");
 
-        voteRaisedIndex += 1;
-        voteContent[voteRaisedIndex] = VotingData(
-            _voteTitle,
-            _voteContent,
-            _receiver,
-            _amount,
-            votingToken.snapshot(),
-            VoteType.MATICSpend,
-            ZEROES,
-            quorum
-        );
-        
-        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
-        voteRaised[voteRaisedIndex] = true;
-        quorums[voteRaisedIndex] = quorum;
-        lastVoteRaised = block.number;
-        emit VoteRaised(voteContent[voteRaisedIndex]);
-        return voteRaisedIndex;
-    }
-    
     function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
         validateQuorum(_newQuorum);
         require(!paused, "Paused");
@@ -295,8 +268,6 @@ contract OnChainGovernanceImpl is AccessControl {
                 _data.receiver.transfer(_data.amount);
             } else if (_data.voteType == VoteType.UpdateQuorum) {
                 quorum = _data.quorum;
-            } else if (_data.voteType == VoteType.Mint) {
-                votingToken.mint(_data.receiver, _data.amount);
             }
             voteResolved[id] = true;
         }
@@ -329,21 +300,8 @@ contract OnChainGovernanceImpl is AccessControl {
         emit ForcePass(proposalIndex);
     }
 
-    function pauseMinting() public onlyRole(PAUSER_ROLE) {
-        mintingEnabled = false;
-    }
-    function unpauseMinting() public onlyRole(PAUSER_ROLE) {
-        mintingEnabled = true;
-    }
     function setPaused(bool _paused) public onlyRole(PAUSER_ROLE) {
         paused = _paused;
-    }
-    function pause() public onlyRole(PAUSER_ROLE) {
-        paused = true;
-    }
-    
-    function unpause() public onlyRole(PAUSER_ROLE) {
-        paused = false;
     }
     
     function revokeMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
