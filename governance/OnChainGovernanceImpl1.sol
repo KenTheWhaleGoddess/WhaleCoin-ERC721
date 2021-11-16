@@ -42,30 +42,32 @@ enum VoteResult {
 contract OnChainGovernanceImpl is AccessControl {
     using SafeMath for uint256;
     
-    bytes32 public constant OWNER_ROLE = keccak256("OWNER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant MEMBER_ROLE = keccak256("MEMBER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     
-    address owner;
-    address nextOwner;
+    address public constant ZEROES = address(0);
+    
+    address public owner;
+    address public nextOwner;
     
     uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
-    uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 0;
-
+    uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 1;
     uint256 public constant MINIMUM_QUORUM_VOTERS = 1;
-    
+
+    uint256 public constant MINIMUM_BLOCKS_BETWEEN_VOTES = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
+
     ERC20Snapshottable public votingToken;
     
     mapping(address => bool) public enabledERC20Token;
 
-    Quorum quorum = Quorum(50, 1200, 1);
+    Quorum public quorum = Quorum(50, 1200, 1);
     mapping(uint256 => Quorum) quorums;
     
     mapping(uint256 => VotingData) public voteContent;
 
-    mapping(uint256 => mapping(address => bool)) voted;
-    mapping(uint256 => mapping(address => string)) justifications;
+    mapping(address => mapping(uint256 => bool)) voted;
+    mapping(address => mapping(uint256 => string)) justifications;
 
     mapping(uint256 => uint256) public yay;
     mapping(uint256 => uint256) public yayCount;
@@ -76,18 +78,24 @@ contract OnChainGovernanceImpl is AccessControl {
     mapping(uint256 => uint256) public totalVotes;
     
     uint256 public voteRaisedIndex;
+    uint256 public lastVoteRaised = block.number - MINIMUM_BLOCKS_BETWEEN_VOTES;
     mapping(uint256 => bool) public voteRaised;
     mapping(uint256 => VoteResult) public voteDecided;
     mapping(uint256 => bool) public voteResolved;
     
-    bool paused;
+    bool public paused;
     
     constructor(ERC20Snapshottable _votingToken) {
         owner = msg.sender;
-        _setupRole(OWNER_ROLE, msg.sender);
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _setupRole(ADMIN_ROLE, msg.sender);
         _setupRole(MEMBER_ROLE, msg.sender); 
         _setupRole(PAUSER_ROLE, msg.sender);
+        
+        _setRoleAdmin(DEFAULT_ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(MEMBER_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
         votingToken = _votingToken;
     }
     
@@ -96,6 +104,7 @@ contract OnChainGovernanceImpl is AccessControl {
         require(address(this).balance >= _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something1!");
         require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES), "Vote too soon!");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -105,14 +114,14 @@ contract OnChainGovernanceImpl is AccessControl {
             _amount,
             votingToken.snapshot(),
             VoteType.MATICSpend,
-            address(0),
+            ZEROES,
             quorum
         );
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
         quorums[voteRaisedIndex] = quorum;
-        
+        lastVoteRaised = block.number;
         emit VoteRaised(voteContent[voteRaisedIndex]);
         return voteRaisedIndex;
     }
@@ -121,6 +130,7 @@ contract OnChainGovernanceImpl is AccessControl {
         require(!enabledERC20Token[_erc20Token], "Token already approved!");
         require(_erc20Token != address(0), "Pls use valid ERC20!");
         require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES), "Vote too soon!");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -137,16 +147,18 @@ contract OnChainGovernanceImpl is AccessControl {
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
         quorums[voteRaisedIndex] = quorum;
-        
+        lastVoteRaised = block.number;
+
         emit VoteRaised(voteContent[voteRaisedIndex]);
         return voteRaisedIndex;
     }
     
     function raiseVoteToSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
         require(enabledERC20Token[_erc20Token], "Token not approved!");
-        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough MATIC!");
+        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough of ERC20!");
         require(_amount > 0, "Send something!");
         require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES), "Vote too soon!");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -163,7 +175,8 @@ contract OnChainGovernanceImpl is AccessControl {
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
         quorums[voteRaisedIndex] = quorum;
-        
+        lastVoteRaised = block.number;
+
         emit VoteRaised(voteContent[voteRaisedIndex]);
         return voteRaisedIndex;
     }
@@ -171,6 +184,7 @@ contract OnChainGovernanceImpl is AccessControl {
     function raiseVoteToUpdateQuorum(address payable _receiver, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
         validateQuorum(_newQuorum);
         require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES), "Vote too soon!");
 
         voteRaisedIndex += 1;
         voteContent[voteRaisedIndex] = VotingData(
@@ -180,23 +194,25 @@ contract OnChainGovernanceImpl is AccessControl {
             0,
             votingToken.snapshot(),
             VoteType.UpdateQuorum,
-            address(0),
+            ZEROES,
             _newQuorum
         );
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
         quorums[voteRaisedIndex] = quorum;
-        
+        lastVoteRaised = block.number;
+
         emit VoteRaised(voteContent[voteRaisedIndex]);
         return voteRaisedIndex;
     }
     
     event Yay(VotingData data);
     event Nay(VotingData data);
+    
     function vote(uint256 id, bool _yay, string memory justification) public onlySender onlyRole(MEMBER_ROLE){
         require(voteRaised[id], "vote not yet raised!");
-        require(!voted[id][msg.sender], "Sender already voted");
+        require(!voted[msg.sender][id], "Sender already voted");
         require(voteDecided[id] == VoteResult.VoteOpen, "vote already decided!");
         require(!paused, "Paused");
         
@@ -223,8 +239,8 @@ contract OnChainGovernanceImpl is AccessControl {
             emit Nay(voteContent[id]);
             voteDecided[id] = VoteResult.Discarded;
         }
-        voted[id][msg.sender] = true;
-        justifications[id][msg.sender] = justification;
+        voted[msg.sender][id] = true;
+        justifications[msg.sender][id] = justification;
         
         emit Voted(msg.sender, voteDecided[id], justification);
     }
@@ -233,14 +249,14 @@ contract OnChainGovernanceImpl is AccessControl {
     
     function resolveVote(uint256 id) public onlyRole(ADMIN_ROLE) {
         require(!paused, "Paused");
-        require(voteDecided[voteRaisedIndex] != VoteResult.VoteOpen, "vote is still open!");
-        require(!voteResolved[voteRaisedIndex], "Vote has already been resolved");
+        require(voteDecided[id] != VoteResult.VoteOpen, "vote is still open!");
+        require(!voteResolved[id], "Vote has already been resolved");
 
         if(voteDecided[id] == VoteResult.Discarded
                 || voteDecided[id] == VoteResult.VetoedByOwner) {
             voteResolved[id] = true;
         } else if (voteDecided[id] == VoteResult.Passed 
-                || voteDecided[id] == VoteResult.PassedByOwner ) {
+                || voteDecided[id] == VoteResult.PassedByOwner) {
             VotingData memory _data = voteContent[id];
             
             if (_data.voteType == VoteType.ERC20New) {
@@ -267,21 +283,19 @@ contract OnChainGovernanceImpl is AccessControl {
     event Veto(uint256 id);
     event ForcePass(uint256 id);
     
-    function ownerVetoProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE) {
+    function ownerVetoProposal(uint256 proposalIndex) public onlyRole(DEFAULT_ADMIN_ROLE) {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
         
         voteDecided[proposalIndex] = VoteResult.VetoedByOwner;
-        voteResolved[proposalIndex] = true;
         emit Veto(proposalIndex);
     }
     
-    function ownerPassProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE)  {
+    function ownerPassProposal(uint256 proposalIndex) public onlyRole(DEFAULT_ADMIN_ROLE)  {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
         
         voteDecided[proposalIndex] = VoteResult.PassedByOwner;
-        voteResolved[proposalIndex] = true;
         emit ForcePass(proposalIndex);
     }
 
@@ -299,19 +313,21 @@ contract OnChainGovernanceImpl is AccessControl {
         _setupRole(MEMBER_ROLE, _newRaiser);
     }
     
-    function promoteNextOwner(address _nextOwner) public onlyRole(OWNER_ROLE) {
-        require(_nextOwner != address(0), "Must promote valid governance");
+    function promoteNextOwner(address _nextOwner) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_nextOwner != owner, "next owner == owner");
+        require(_nextOwner != ZEROES, "Must promote valid governance");
         nextOwner = _nextOwner;   
     }
     
-    function acceptOwnership() public onlyRole(MEMBER_ROLE) onlySender {
-        require(nextOwner != address(0), "Nobody nominated");
-        revokeRole(OWNER_ROLE, owner);
+    function acceptOwnership() public onlyRole(MEMBER_ROLE) {
+        require(msg.sender != owner, "Owner cannot take own ownership");
+        require(nextOwner == msg.sender, "Caller not nominated");
         
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        revokeRole(DEFAULT_ADMIN_ROLE, owner);
         owner = msg.sender;
-        _setupRole(OWNER_ROLE, msg.sender);
 
-        nextOwner = address(0);
+        nextOwner = ZEROES;
     }
     
     modifier onlySender {
