@@ -1,97 +1,433 @@
+// SPDX-License-Identifier: None
+
 pragma solidity ^0.8.7;
 
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/utils/Timers.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 
-/// @title Multisignature wallet - Allows multiple parties to agree on transactions before execution.
-/// @author Stefan George - <stefan.george@consensys.net>
-contract MultiSigWallet {
+struct VotingData {
+    string title;
+    string content;
+    
+    address payable receiver;
+    uint256 amount;
+    uint256 snapshotId;
+    uint256 blockStart;
+    
+    VoteType voteType;
+    address erc20Token;
+    Quorum quorum;
+    
 
-    /*
-     *  Events
-     */
-    event Confirmation(address indexed sender, uint indexed transactionId);
-    event Revocation(address indexed sender, uint indexed transactionId);
-    event Submission(uint indexed transactionId);
-    event Execution(uint indexed transactionId);
-    event ExecutionFailure(uint indexed transactionId);
-    event Deposit(address indexed sender, uint value);
-    event OwnerAddition(address indexed owner);
-    event OwnerRemoval(address indexed owner);
-    event RequirementChange(uint required);
+    address[] targets;
+    uint256[] values;
+    bytes[] calldatas;    
+}
 
-    /*
-     *  Constants
-     */
-    uint constant public MAX_OWNER_COUNT = 50;
+interface ERC20Snapshottable {
+    function snapshot() external returns(uint256);
+    function balanceOfAt(address _user, uint256 _id) external view returns (uint256);
+    function balanceOf(address _user) external view returns (uint256);
+}
 
-    /*
-     *  Storage
-     */
-    mapping (uint => Transaction) public transactions;
-    mapping (uint => mapping (address => bool)) public confirmations;
-    mapping (address => bool) public isOwner;
-    address[] public owners;
-    uint public required;
-    uint public transactionCount;
 
-    struct Transaction {
-        address destination;
-        uint value;
-        bytes data;
-        bool executed;
+struct Quorum {
+    uint256 quorumPercentage;
+    uint256 staticQuorumTokens;
+    uint256 minVoters;
+}
+
+enum VoteType {
+    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum, ContractCall
+}
+
+enum VoteResult {
+    VoteOpen, Passed, PassedByOwner, VetoedByOwner, Discarded
+}
+
+contract OnChainGovernanceImpl is AccessControl {
+    using SafeMath for uint256;
+    
+    bytes32 public constant OWNER_ROLE = keccak256("OWNER_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant MEMBER_ROLE = keccak256("MEMBER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    
+    address public constant ZEROES = address(0);
+    
+    address public owner;
+    address public nextOwner;
+    
+    uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
+    uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 1;
+    uint256 public constant MINIMUM_QUORUM_VOTERS = 1;
+    
+    uint256 public constant MIN_TOKENS_TO_RAISE_VOTE = 1 ether;
+    uint256 public constant MIN_TOKENS_TO_VOTE = .01 ether;
+
+    uint256 public constant MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
+    uint256 public constant MINIMUM_BLOCKS_BEFORE_VOTE_RESOLVED = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
+
+    ERC20Snapshottable public votingToken;
+
+    mapping(address => bool) public enabledERC20Token;
+
+    Quorum public quorum = Quorum(50, 1200, 1);
+    mapping(uint256 => Quorum) quorums;
+    
+    mapping(uint256 => VotingData) public voteContent;
+
+    mapping(address => mapping(uint256 => bool)) voted;
+    mapping(address => mapping(uint256 => string)) justifications;
+
+    mapping(uint256 => uint256) public yay;
+    mapping(uint256 => uint256) public yayCount;
+
+    mapping(uint256 => uint256) public nay;
+    mapping(uint256 => uint256) public nayCount;
+
+    mapping(uint256 => uint256) public totalVotes;
+    
+    uint256 public voteRaisedIndex;
+    uint256 public lastVoteRaised = block.number - MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED;
+    mapping(uint256 => bool) public voteRaised;
+    mapping(uint256 => VoteResult) public voteDecided;
+    mapping(uint256 => bool) public voteResolved;
+    
+    //pauser role state variables
+    bool public paused;
+    bool public mintingEnabled;
+    
+    constructor(ERC20Snapshottable _votingToken) {
+        owner = msg.sender;
+        _setupRole(OWNER_ROLE, msg.sender);
+        _setupRole(ADMIN_ROLE, msg.sender);
+        _setupRole(MEMBER_ROLE, msg.sender); 
+        _setupRole(PAUSER_ROLE, msg.sender);
+        
+        _setRoleAdmin(OWNER_ROLE, OWNER_ROLE);
+        _setRoleAdmin(ADMIN_ROLE, OWNER_ROLE);
+        _setRoleAdmin(MEMBER_ROLE, OWNER_ROLE);
+        _setRoleAdmin(PAUSER_ROLE, OWNER_ROLE);
+        votingToken = _votingToken;
+    }
+    
+    event VoteRaised(VotingData data);
+    function proposeSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        require(address(this).balance >= _amount, "Not enough MATIC!");
+        require(_amount > 0, "Send something1!");
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _receiver,
+            _amount,
+            votingToken.snapshot(),
+            block.number,
+            VoteType.MATICSpend,
+            ZEROES,
+            quorum,
+            new address[](0),
+            new uint256[](0),
+            new bytes[](0)
+        );
+        
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+        emit VoteRaised(voteContent[voteRaisedIndex]);
+        return voteRaisedIndex;
+    }
+    
+    function proposeAddERC20Token(address payable _receiver, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256) {
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of Voting Token to raise vote!");
+        require(!enabledERC20Token[_erc20Token], "Token already approved!");
+        require(_erc20Token != address(0), "Pls use valid ERC20!");
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _receiver,
+            0,
+            votingToken.snapshot(),
+            block.number,
+            VoteType.ERC20New,
+            _erc20Token,
+            quorum,
+            new address[](0),
+            new uint256[](0),
+            new bytes[](0)
+        );
+        
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+
+        emit VoteRaised(voteContent[voteRaisedIndex]);
+        return voteRaisedIndex;
+    }
+    
+    function proposeSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of Voting Token to raise vote!");
+        require(enabledERC20Token[_erc20Token], "Token not approved!");
+        require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough of ERC20!");
+        require(_amount > 0, "Send something!");
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _receiver,
+            _amount,
+            votingToken.snapshot(),
+            block.number,
+            VoteType.ERC20Spend,
+            _erc20Token,
+            quorum,
+            new address[](0),
+            new uint256[](0),
+            new bytes[](0)
+        );
+        
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+
+        emit VoteRaised(voteContent[voteRaisedIndex]);
+        return voteRaisedIndex;
+    }
+    function proposeUpdateQuorum(address payable _recipient, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        validateQuorum(_newQuorum);
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _recipient,
+            0,
+            votingToken.snapshot(),
+            block.number,
+            VoteType.UpdateQuorum,
+            ZEROES,
+            _newQuorum,
+            new address[](0),
+            new uint256[](0),
+            new bytes[](0)
+        );
+        
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+
+        emit VoteRaised(voteContent[voteRaisedIndex]);
+        return voteRaisedIndex;
+    }
+    
+    function proposeContractCall(address payable _recipient, address[] memory targets, uint256[] memory values, bytes[] memory calldatas, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) returns (uint256) {
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        require(targets.length == values.length, "Governor: invalid proposal length");
+        require(targets.length == calldatas.length, "Governor: invalid proposal length");
+        require(targets.length > 0, "Governor: empty proposal");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _recipient,
+            0,
+            block.number,
+            votingToken.snapshot(),
+            VoteType.UpdateQuorum,
+            ZEROES,
+            quorum,
+            targets,
+            values,
+            calldatas
+        );
+    
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+        
+        return voteRaisedIndex;
+    }    
+    event Yay(VotingData data);
+    event Nay(VotingData data);
+    event Voted(address voter, VoteResult result, string justification);
+
+    function vote(uint256 id, bool _yay, string memory justification) public onlySender onlyRole(MEMBER_ROLE){
+        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_VOTE, "Not enough of Voting token to vote. Need .01");
+        require(voteRaised[id], "vote not yet raised!");
+        require(!voted[msg.sender][id], "Sender already voted");
+        require(voteDecided[id] == VoteResult.VoteOpen, "vote already decided!");
+        require(!paused, "Paused");
+        
+        uint256 balanceOf = votingToken.balanceOfAt(msg.sender, voteContent[id].snapshotId);
+        require(balanceOf > 0, "No voting token!");
+        
+        if (_yay) {
+            yay[id] += balanceOf;
+            totalVotes[id] += balanceOf;
+            yayCount[id] += 1;
+        } else {
+            nay[id] += balanceOf;
+            totalVotes[id] += balanceOf;
+            nayCount[id] += 1;
+        }
+        if (yay[id] * 100 > (quorums[id].quorumPercentage * totalVotes[id])
+                && yay[id] > quorums[id].staticQuorumTokens
+                && quorums[id].minVoters <= yayCount[id]){
+            emit Yay(voteContent[id]);
+            voteDecided[id] = VoteResult.Passed;
+        } else if ((nay[id] * 100 > (quorums[id].quorumPercentage * totalVotes[id]))
+                && nay[id] > quorums[id].staticQuorumTokens
+                && quorums[id].minVoters <= nayCount[id]) {
+            emit Nay(voteContent[id]);
+            voteDecided[id] = VoteResult.Discarded;
+        }
+        voted[msg.sender][id] = true;
+        justifications[msg.sender][id] = justification;
+        
+        emit Voted(msg.sender, voteDecided[id], justification);
+    }
+    
+    function resolveVote(uint256 id) public onlyRole(ADMIN_ROLE) {
+        require(!paused, "Paused");
+        require(voteDecided[id] != VoteResult.VoteOpen, "vote is still open!");
+        require(!voteResolved[id], "Vote has already been resolved");
+        require(voteContent[id].blockStart + MINIMUM_BLOCKS_BEFORE_VOTE_RESOLVED < block.number, "Need to wait to resolve");
+
+        if(voteDecided[id] == VoteResult.Discarded
+                || voteDecided[id] == VoteResult.VetoedByOwner) {
+            voteResolved[id] = true;
+        } else if (voteDecided[id] == VoteResult.Passed 
+                || voteDecided[id] == VoteResult.PassedByOwner) {
+            VotingData memory _data = voteContent[id];
+            
+            if (_data.voteType == VoteType.ERC20New) {
+                enabledERC20Token[_data.erc20Token] = true;
+            } else if (_data.voteType == VoteType.ERC20Spend) {
+                ERC20(_data.erc20Token).transfer(_data.receiver, _data.amount);
+            } else if (_data.voteType == VoteType.MATICSpend) {
+                _data.receiver.transfer(_data.amount);
+            } else if (_data.voteType == VoteType.UpdateQuorum) {
+                quorum = _data.quorum;
+            } else if (_data.voteType == VoteType.ContractCall) {
+                _execute(_data.targets, _data.values, _data.calldatas);
+            }
+            voteResolved[id] = true;
+        }
+    }       
+    event ContractCallExecuted(bool success, bytes returndata);
+    function _execute(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas
+    ) internal virtual {
+        string memory errorMessage = "Governor: call reverted without message";
+        for (uint256 i = 0; i < targets.length; ++i) {
+            (bool success, bytes memory returndata) = targets[i].call{value: values[i]}(calldatas[i]);
+            Address.verifyCallResult(success, returndata, errorMessage);
+            emit ContractCallExecuted(success, returndata);
+        }
+    }
+    
+    function validateQuorum(Quorum memory _quorum) internal pure {
+        require(_quorum.quorumPercentage <= MAXIMUM_QUORUM_PERCENTAGE
+            && _quorum.quorumPercentage >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
+            
+        require(_quorum.minVoters >= MINIMUM_QUORUM_VOTERS, "Quorum requires 1 voter");
     }
 
-    /*
-     *  Modifiers
-     */
-    modifier onlyWallet() {
-        require(msg.sender == address(this));
-        _;
+    event Veto(uint256 id);
+    event ForcePass(uint256 id);
+    
+    function ownerVetoProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE) {
+        require(voteRaised[proposalIndex], "vote not raised!");
+        require(!voteResolved[proposalIndex], "Vote resolved!");
+        
+        voteDecided[proposalIndex] = VoteResult.VetoedByOwner;
+        emit Veto(proposalIndex);
+    }
+    
+    function ownerPassProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE)  {
+        require(voteRaised[proposalIndex], "vote not raised!");
+        require(!voteResolved[proposalIndex], "Vote resolved!");
+        
+        voteDecided[proposalIndex] = VoteResult.PassedByOwner;
+        emit ForcePass(proposalIndex);
     }
 
-    modifier ownerDoesNotExist(address owner) {
-        require(!isOwner[owner]);
-        _;
+    function pauseMinting() public onlyRole(PAUSER_ROLE) {
+        mintingEnabled = false;
     }
+    function unpauseMinting() public onlyRole(PAUSER_ROLE) {
+        mintingEnabled = true;
+    }
+    function pause() public onlyRole(PAUSER_ROLE) {
+        paused = true;
+    }
+    function unpause() public onlyRole(PAUSER_ROLE) {
+        paused = false;
+    }
+    
+    function revokeMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
+        require(!paused, "Paused");
+        revokeRole(MEMBER_ROLE, _newRaiser);
+    }
+    
+    function addMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
+        require(!paused, "Paused");
+        _setupRole(MEMBER_ROLE, _newRaiser);
+    }
+    
+    function promoteNextOwner(address _nextOwner) public onlyRole(OWNER_ROLE) {
+        require(_nextOwner != owner, "next owner == owner");
+        require(_nextOwner != ZEROES, "Must promote valid governance");
+        nextOwner = _nextOwner;   
+    }
+    
+    function acceptOwnership() public onlyRole(MEMBER_ROLE) {
+        require(msg.sender != owner, "Owner cannot take own ownership");
+        require(nextOwner == msg.sender, "Caller not nominated");
+        
+        _setupRole(OWNER_ROLE, msg.sender);
+        revokeRole(OWNER_ROLE, owner);
+        owner = msg.sender;
 
-    modifier ownerExists(address owner) {
-        require(isOwner[owner]);
-        _;
+        nextOwner = ZEROES;
     }
+    
+    modifier onlySender {
+      require(msg.sender == tx.origin, "No smart contracts");
+      _;
+    }
+    
 
-    modifier transactionExists(uint transactionId) {
-        require(transactions[transactionId].destination != address(0));
-        _;
-    }
-
-    modifier confirmed(uint transactionId, address owner) {
-        require(confirmations[transactionId][owner]);
-        _;
-    }
-
-    modifier notConfirmed(uint transactionId, address owner) {
-        require(!confirmations[transactionId][owner]);
-        _;
-    }
-
-    modifier notExecuted(uint transactionId) {
-        require(!transactions[transactionId].executed);
-        _;
-    }
-
-    modifier notNull(address _address) {
-        require(_address != address(0));
-        _;
-    }
-
-    modifier validRequirement(uint ownerCount, uint _required) {
-        require(ownerCount <= MAX_OWNER_COUNT
-            && _required <= ownerCount
-            && _required != 0
-            && ownerCount != 0);
-        _;
-    }
     event Received(address from, uint amount);
-
     receive() external payable {
         if (msg.value > 0)
             emit Received(msg.sender, msg.value);
@@ -100,285 +436,5 @@ contract MultiSigWallet {
     fallback() external payable {
         if (msg.value > 0)
             emit Received(msg.sender, msg.value);
-    }
-    /*
-     * Public functions
-     */
-    /// @dev Contract constructor sets initial owners and required number of confirmations.
-    /// @param _owners List of initial owners.
-    /// @param _required Number of required confirmations.
-    constructor(address[] memory _owners, uint _required)
-    {
-        for (uint i=0; i<_owners.length; i++) {
-            require(!isOwner[_owners[i]] && _owners[i] != address(0));
-            isOwner[_owners[i]] = true;
-        }
-        owners = address[](_owners);
-        required = _required;
-    }
-
-    /// @dev Allows to add a new owner. Transaction has to be sent by wallet.
-    /// @param owner Address of new owner.
-    function addOwner(address owner)
-        public
-        onlyWallet
-        ownerDoesNotExist(owner)
-        notNull(owner)
-        validRequirement(owners.length + 1, required)
-    {
-        isOwner[owner] = true;
-        owners.push(owner);
-        emit OwnerAddition(owner);
-    }
-
-    /// @dev Allows to remove an owner. Transaction has to be sent by wallet.
-    /// @param owner Address of owner.
-    function removeOwner(address owner)
-        public
-        onlyWallet
-        ownerExists(owner)
-    {
-        isOwner[owner] = false;
-        for (uint i=0; i<owners.length - 1; i++)
-            if (owners[i] == owner) {
-                owners[i] = owners[owners.length - 1];
-                break;
-            }
-        if (required > owners.length)
-            changeRequirement(owners.length);
-        emit OwnerRemoval(owner);
-    }
-
-    /// @dev Allows to replace an owner with a new owner. Transaction has to be sent by wallet.
-    /// @param owner Address of owner to be replaced.
-    /// @param newOwner Address of new owner.
-    function replaceOwner(address owner, address newOwner)
-        public
-        onlyWallet
-        ownerExists(owner)
-        ownerDoesNotExist(newOwner)
-    {
-        for (uint i=0; i<owners.length; i++)
-            if (owners[i] == owner) {
-                owners[i] = newOwner;
-                break;
-            }
-        isOwner[owner] = false;
-        isOwner[newOwner] = true;
-        emit OwnerRemoval(owner);
-        emit OwnerAddition(newOwner);
-    }
-
-    /// @dev Allows to change the number of required confirmations. Transaction has to be sent by wallet.
-    /// @param _required Number of required confirmations.
-    function changeRequirement(uint _required)
-        public
-        onlyWallet
-        validRequirement(owners.length, _required)
-    {
-        required = _required;
-        emit RequirementChange(_required);
-    }
-
-    /// @dev Allows an owner to submit and confirm a transaction.
-    /// @param destination Transaction target address.
-    /// @param value Transaction ether value.
-    /// @param data Transaction data payload.
-    function submitTransaction(address destination, uint value, bytes memory data)
-        public
-        returns (uint transactionId)
-    {
-        transactionId = addTransaction(destination, value, data);
-        confirmTransaction(transactionId);
-    }
-
-    /// @dev Allows an owner to confirm a transaction.
-    /// @param transactionId Transaction ID.
-    function confirmTransaction(uint transactionId)
-        public
-        ownerExists(msg.sender)
-        transactionExists(transactionId)
-        notConfirmed(transactionId, msg.sender)
-    {
-        confirmations[transactionId][msg.sender] = true;
-        emit Confirmation(msg.sender, transactionId);
-        executeTransaction(transactionId);
-    }
-
-    /// @dev Allows an owner to revoke a confirmation for a transaction.
-    /// @param transactionId Transaction ID.
-    function revokeConfirmation(uint transactionId)
-        public
-        ownerExists(msg.sender)
-        confirmed(transactionId, msg.sender)
-        notExecuted(transactionId)
-    {
-        confirmations[transactionId][msg.sender] = false;
-        emit Revocation(msg.sender, transactionId);
-    }
-
-    /// @dev Allows anyone to execute a confirmed transaction.
-    /// @param transactionId Transaction ID.
-    function executeTransaction(uint transactionId)
-        public
-        ownerExists(msg.sender)
-        confirmed(transactionId, msg.sender)
-        notExecuted(transactionId)
-    {
-        if (isConfirmed(transactionId)) {
-            Transaction storage txn = transactions[transactionId];
-            txn.executed = true;
-            if (external_call(txn.destination, txn.value, txn.data.length, txn.data))
-                emit Execution(transactionId);
-            else {
-                emit ExecutionFailure(transactionId);
-                txn.executed = false;
-            }
-        }
-    }
-
-    // call has been separated into its own function in order to take advantage
-    // of the Solidity's code generator to produce a loop that copies tx.data into memory.
-    function external_call(address destination, uint value, uint dataLength, bytes memory data) private returns (bool) {
-        bool result;
-        assembly {
-            let x := mload(0x40)   // "Allocate" memory for output (0x40 is where "free memory" pointer is stored by convention)
-            let d := add(data, 32) // First 32 bytes are the padded length of data, so exclude that
-            result := call(
-                sub(gas(), 34710),   // 34710 is the value that solidity is currently emitting
-                                   // It includes callGas (700) + callVeryLow (3, to pay for SUB) + callValueTransferGas (9000) +
-                                   // callNewAccountGas (25000, in case the destination address does not exist and needs creating)
-                destination,
-                value,
-                d,
-                dataLength,        // Size of the input (in bytes) - this is what fixes the padding problem
-                x,
-                0                  // Output is ignored, therefore the output size is zero
-            )
-        }
-        return result;
-    }
-
-    /// @dev Returns the confirmation status of a transaction.
-    /// @param transactionId Transaction ID.
-    /// @return Confirmation status.
-    function isConfirmed(uint transactionId)
-        public
-        view
-        returns (bool)
-    {
-        uint count = 0;
-        for (uint i=0; i<owners.length; i++) {
-            if (confirmations[transactionId][owners[i]])
-                count += 1;
-            if (count == required)
-                return true;
-        }
-    }
-
-    /*
-     * Internal functions
-     */
-    /// @dev Adds a new transaction to the transaction mapping, if transaction does not exist yet.
-    /// @param destination Transaction target address.
-    /// @param value Transaction ether value.
-    /// @param data Transaction data payload.
-    function addTransaction(address destination, uint value, bytes memory data)
-        internal
-        notNull(destination)
-        returns (uint transactionId)
-    {
-        transactionId = transactionCount;
-        transactions[transactionId] = Transaction({
-            destination: destination,
-            value: value,
-            data: data,
-            executed: false
-        });
-        transactionCount += 1;
-        emit Submission(transactionId);
-    }
-
-    /*
-     * Web3 call functions
-     */
-    /// @dev Returns number of confirmations of a transaction.
-    /// @param transactionId Transaction ID.
-    function getConfirmationCount(uint transactionId)
-        public
-        view
-        returns (uint count)
-    {
-        for (uint i=0; i<owners.length; i++)
-            if (confirmations[transactionId][owners[i]])
-                count += 1;
-    }
-
-    /// @dev Returns total number of transactions after filers are applied.
-    /// @param pending Include pending transactions.
-    function getTransactionCount(bool pending, bool executed)
-        public
-        view
-        returns (uint count)
-    {
-        for (uint i=0; i<transactionCount; i++)
-            if (   pending && !transactions[i].executed
-                || executed && transactions[i].executed)
-                count += 1;
-    }
-
-    /// @dev Returns list of owners.
-    /// @return List of owner addresses.
-    function getOwners()
-        public
-        view
-        returns (address[] memory)
-    {
-        return owners;
-    }
-
-    /// @dev Returns array with owner addresses, which confirmed transaction.
-    /// @param transactionId Transaction ID.
-    function getConfirmations(uint transactionId)
-        public
-        view
-        returns (address[] memory _confirmations)
-    {
-        address[] memory confirmationsTemp = new address[](owners.length);
-        uint count = 0;
-        uint i;
-        for (i=0; i<owners.length; i++)
-            if (confirmations[transactionId][owners[i]]) {
-                confirmationsTemp[count] = owners[i];
-                count += 1;
-            }
-        _confirmations = new address[](count);
-        for (i=0; i<count; i++)
-            _confirmations[i] = confirmationsTemp[i];
-    }
-
-    /// @dev Returns list of transaction IDs in defined range.
-    /// @param from Index start position of transaction array.
-    /// @param to Index end position of transaction array.
-    /// @param pending Include pending transactions.
-    /// @param executed Include executed transactions.
-    function getTransactionIds(uint from, uint to, bool pending, bool executed)
-        public
-        view
-        returns (uint[] memory _transactionIds)
-    {
-        uint[] memory transactionIdsTemp = new uint[](transactionCount);
-        uint count = 0;
-        uint i;
-        for (i=0; i<transactionCount; i++)
-            if (   pending && !transactions[i].executed
-                || executed && transactions[i].executed)
-            {
-                transactionIdsTemp[count] = i;
-                count += 1;
-            }
-        _transactionIds = new uint[](to - from);
-        for (i=from; i<to; i++)
-            _transactionIds[i - from] = transactionIdsTemp[i];
     }
 }
