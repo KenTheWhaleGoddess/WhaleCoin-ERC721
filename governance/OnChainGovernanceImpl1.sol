@@ -20,6 +20,7 @@ struct VotingData {
     VoteType voteType;
     address erc20Token;
     Quorum quorum;
+    Fees fees;
     
 
     address[] targets;
@@ -27,10 +28,9 @@ struct VotingData {
     bytes[] calldatas;    
 }
 
-interface ERC20Snapshottable {
+interface ERC20Snapshottable is IERC20 {
     function snapshot() external returns(uint256);
     function balanceOfAt(address _user, uint256 _id) external view returns (uint256);
-    function balanceOf(address _user) external view returns (uint256);
 }
 
 
@@ -40,8 +40,13 @@ struct Quorum {
     uint256 minVoters;
 }
 
+struct Fees {
+    uint256 min;
+    uint256 percent;
+}
+
 enum VoteType {
-    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum, ContractCall
+    ERC20New, ERC20Spend, MATICSpend, UpdateQuorum, UpdateFees, ContractCall
 }
 
 enum VoteResult {
@@ -64,9 +69,7 @@ contract OnChainGovernanceImpl is AccessControl {
     uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
     uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 1;
     uint256 public constant MINIMUM_QUORUM_VOTERS = 1;
-    
-    uint256 public constant MIN_TOKENS_TO_RAISE_VOTE = 1 ether;
-    uint256 public constant MIN_TOKENS_TO_VOTE = .01 ether;
+    uint256 public constant MINIMUM_TOKENS_TO_VOTE = .01 ether;
 
     uint256 public constant MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
     uint256 public constant MINIMUM_BLOCKS_BEFORE_VOTE_RESOLVED = 2; //* 60 * 30; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
@@ -77,7 +80,9 @@ contract OnChainGovernanceImpl is AccessControl {
 
     Quorum public quorum = Quorum(50, 1200, 1);
     mapping(uint256 => Quorum) quorums;
-    
+
+    Fees public fee = Fees(.01 ether, 10);
+
     mapping(uint256 => VotingData) public voteContent;
 
     mapping(address => mapping(uint256 => bool)) voted;
@@ -117,7 +122,7 @@ contract OnChainGovernanceImpl is AccessControl {
     
     event VoteRaised(VotingData data);
     function proposeSpendMATIC(address payable _receiver, uint256 _amount, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of ERC20!");
         require(address(this).balance >= _amount, "Not enough MATIC!");
         require(_amount > 0, "Send something1!");
         require(!paused, "Paused");
@@ -134,10 +139,15 @@ contract OnChainGovernanceImpl is AccessControl {
             VoteType.MATICSpend,
             ZEROES,
             quorum,
+            fee,
             new address[](0),
             new uint256[](0),
             new bytes[](0)
         );
+
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
@@ -148,7 +158,7 @@ contract OnChainGovernanceImpl is AccessControl {
     }
     
     function proposeAddERC20Token(address payable _receiver, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256) {
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of Voting Token to raise vote!");
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of Voting Token to raise vote!");
         require(!enabledERC20Token[_erc20Token], "Token already approved!");
         require(_erc20Token != address(0), "Pls use valid ERC20!");
         require(!paused, "Paused");
@@ -165,10 +175,15 @@ contract OnChainGovernanceImpl is AccessControl {
             VoteType.ERC20New,
             _erc20Token,
             quorum,
+            fee,
             new address[](0),
             new uint256[](0),
             new bytes[](0)
         );
+
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
@@ -180,7 +195,7 @@ contract OnChainGovernanceImpl is AccessControl {
     }
     
     function proposeSpendERC20Token(address payable _receiver, uint256 _amount, address _erc20Token, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of Voting Token to raise vote!");
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of Voting Token to raise vote!");
         require(enabledERC20Token[_erc20Token], "Token not approved!");
         require(ERC20(_erc20Token).balanceOf(address(this)) > _amount, "Not enough of ERC20!");
         require(_amount > 0, "Send something!");
@@ -198,10 +213,15 @@ contract OnChainGovernanceImpl is AccessControl {
             VoteType.ERC20Spend,
             _erc20Token,
             quorum,
+            fee,
             new address[](0),
             new uint256[](0),
             new bytes[](0)
         );
+        
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
@@ -212,7 +232,7 @@ contract OnChainGovernanceImpl is AccessControl {
         return voteRaisedIndex;
     }
     function proposeUpdateQuorum(address payable _recipient, Quorum memory _newQuorum, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of ERC20!");
         validateQuorum(_newQuorum);
         require(!paused, "Paused");
         require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
@@ -228,10 +248,15 @@ contract OnChainGovernanceImpl is AccessControl {
             VoteType.UpdateQuorum,
             ZEROES,
             _newQuorum,
+            fee,
             new address[](0),
             new uint256[](0),
             new bytes[](0)
         );
+
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
         
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
@@ -242,8 +267,44 @@ contract OnChainGovernanceImpl is AccessControl {
         return voteRaisedIndex;
     }
     
+    
+    function proposeUpdateFees(address payable _recipient, Fees memory _newFees, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) onlySender returns (uint256){
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of ERC20!");
+        validateFees(_newFees);
+        require(!paused, "Paused");
+        require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
+
+        voteRaisedIndex += 1;
+        voteContent[voteRaisedIndex] = VotingData(
+            _voteTitle,
+            _voteContent,
+            _recipient,
+            0,
+            votingToken.snapshot(),
+            block.number,
+            VoteType.UpdateFees,
+            ZEROES,
+            quorum,
+            _newFees,
+            new address[](0),
+            new uint256[](0),
+            new bytes[](0)
+        );
+
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
+        
+        voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
+        voteRaised[voteRaisedIndex] = true;
+        quorums[voteRaisedIndex] = quorum;
+        lastVoteRaised = block.number;
+
+        emit VoteRaised(voteContent[voteRaisedIndex]);
+        return voteRaisedIndex;
+    }
     function proposeContractCall(address payable _recipient, address[] memory targets, uint256[] memory values, bytes[] memory calldatas, string memory _voteTitle, string memory _voteContent) public onlyRole(MEMBER_ROLE) returns (uint256) {
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_RAISE_VOTE, "Not enough of ERC20!");
+        require(votingToken.balanceOf(msg.sender) >= fee.min, "Not enough of ERC20!");
         require(!paused, "Paused");
         require(block.number >(lastVoteRaised + MINIMUM_BLOCKS_BETWEEN_VOTES_RAISED), "Vote too soon!");
 
@@ -262,11 +323,16 @@ contract OnChainGovernanceImpl is AccessControl {
             VoteType.UpdateQuorum,
             ZEROES,
             quorum,
+            fee,
             targets,
             values,
             calldatas
         );
-    
+
+        uint256 percent = votingToken.balanceOf(msg.sender) / 100 * (fee.percent);
+        uint256 fee = percent > fee.min ? percent : fee.min;
+        votingToken.transferFrom(msg.sender, address(this), fee);
+        
         voteDecided[voteRaisedIndex] = VoteResult.VoteOpen;
         voteRaised[voteRaisedIndex] = true;
         quorums[voteRaisedIndex] = quorum;
@@ -279,7 +345,7 @@ contract OnChainGovernanceImpl is AccessControl {
     event Voted(address voter, VoteResult result, string justification);
 
     function vote(uint256 id, bool _yay, string memory justification) public onlySender onlyRole(MEMBER_ROLE){
-        require(votingToken.balanceOf(msg.sender) > MIN_TOKENS_TO_VOTE, "Not enough of Voting token to vote. Need .01");
+        require(votingToken.balanceOf(msg.sender) >= MINIMUM_TOKENS_TO_VOTE, "Not enough of Voting token to vote. Need .01");
         require(voteRaised[id], "vote not yet raised!");
         require(!voted[msg.sender][id], "Sender already voted");
         require(voteDecided[id] == VoteResult.VoteOpen, "vote already decided!");
@@ -335,6 +401,8 @@ contract OnChainGovernanceImpl is AccessControl {
                 _data.receiver.transfer(_data.amount);
             } else if (_data.voteType == VoteType.UpdateQuorum) {
                 quorum = _data.quorum;
+            } else if (_data.voteType == VoteType.UpdateFees) {
+                fee = _data.fees;
             } else if (_data.voteType == VoteType.ContractCall) {
                 _execute(_data.targets, _data.values, _data.calldatas);
             }
@@ -362,6 +430,10 @@ contract OnChainGovernanceImpl is AccessControl {
         require(_quorum.minVoters >= MINIMUM_QUORUM_VOTERS, "Quorum requires 1 voter");
     }
 
+    function validateFees(Fees memory _fees) internal pure {
+        require(_fees.percent <= MAXIMUM_QUORUM_PERCENTAGE
+            && _fees.percent >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
+    }
     event Veto(uint256 id);
     event ForcePass(uint256 id);
     
