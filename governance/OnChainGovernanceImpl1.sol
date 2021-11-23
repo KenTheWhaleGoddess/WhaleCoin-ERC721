@@ -387,6 +387,8 @@ contract OnChainGovernanceImpl is AccessControl {
         emit Voted(msg.sender, voteDecided[id], justification);
     }
     
+    event VoteResolved(address _user, uint256 id);
+    
     function resolveVote(uint256 id) public onlyRole(ADMIN_ROLE) {
         require(!paused, "Paused");
         require(voteDecided[id] != VoteResult.VoteOpen, "vote is still open!");
@@ -414,6 +416,7 @@ contract OnChainGovernanceImpl is AccessControl {
                 _execute(_data.targets, _data.values, _data.calldatas);
             }
             voteResolved[id] = true;
+            emit VoteResolved(msg.sender, id);
         }
     }       
     event ContractCallExecuted(bool success, bytes returndata);
@@ -457,7 +460,8 @@ contract OnChainGovernanceImpl is AccessControl {
     function ownerVetoProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE) {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
-        
+        require(owner != address(this), "when self governed, veto is disabled");
+
         voteDecided[proposalIndex] = VoteResult.VetoedByOwner;
         emit Veto(proposalIndex);
     }
@@ -465,6 +469,7 @@ contract OnChainGovernanceImpl is AccessControl {
     function ownerPassProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE)  {
         require(voteRaised[proposalIndex], "vote not raised!");
         require(!voteResolved[proposalIndex], "Vote resolved!");
+        require(owner != address(this), "when self governed, owner pass is disabled");
         
         voteDecided[proposalIndex] = VoteResult.PassedByOwner;
         emit ForcePass(proposalIndex);
