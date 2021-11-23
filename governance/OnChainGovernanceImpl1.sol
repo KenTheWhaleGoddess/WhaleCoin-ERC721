@@ -86,6 +86,7 @@ contract OnChainGovernanceImpl is AccessControl {
     mapping(uint256 => Quorum) quorums;
 
     Fees public fee = Fees(.01 ether, 10, address(this));
+    uint256 public tokenPrice = 1 ether; //1 matic per token
 
     mapping(uint256 => VotingData) public voteContent;
 
@@ -110,8 +111,8 @@ contract OnChainGovernanceImpl is AccessControl {
     
     //pauser role state variables
     bool public paused;
-    bool public mintingEnabled;
-    
+    bool public buyingPaused;
+
     constructor() {
         owner = msg.sender;
         _setupRole(OWNER_ROLE, msg.sender);
@@ -428,7 +429,17 @@ contract OnChainGovernanceImpl is AccessControl {
             emit ContractCallExecuted(success, returndata);
         }
     }
-    
+
+    event TokensPurchased(address _user, uint256 _amount);
+    function buyTokensWithMATIC(uint256 amount) public payable {
+        require(!paused, "Paused");
+        require(!buyingPaused, "Buying paused");
+        require(votingToken.balanceOf(address(this)) >= amount, "Contract has not enough tokens to sell");
+        require(msg.value == (amount * tokenPrice), "Not sending sufficient MATIC, or sending more MATIC than required");
+        
+        votingToken.transferFrom(address(this), msg.sender, amount);
+        emit TokensPurchased(msg.sender, amount);
+    }
     function validateQuorum(Quorum memory _quorum) internal pure {
         require(_quorum.quorumPercentage <= MAXIMUM_QUORUM_PERCENTAGE
             && _quorum.quorumPercentage >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
@@ -459,19 +470,19 @@ contract OnChainGovernanceImpl is AccessControl {
         emit ForcePass(proposalIndex);
     }
 
-    function pauseMinting() public onlyRole(PAUSER_ROLE) {
-        mintingEnabled = false;
-    }
-    function unpauseMinting() public onlyRole(PAUSER_ROLE) {
-        mintingEnabled = true;
-    }
     function pause() public onlyRole(PAUSER_ROLE) {
         paused = true;
     }
     function unpause() public onlyRole(PAUSER_ROLE) {
         paused = false;
     }
-    
+
+    function pauseBuying() public onlyRole(PAUSER_ROLE) {
+        buyingPaused = true;
+    }
+    function unpauseBuying() public onlyRole(PAUSER_ROLE) {
+        buyingPaused = false;
+    }
     function revokeMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
         require(!paused, "Paused");
         revokeRole(MEMBER_ROLE, _newRaiser);
