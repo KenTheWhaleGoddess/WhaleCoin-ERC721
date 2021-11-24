@@ -49,6 +49,11 @@ struct Fees {
     address recipient;
 }
 
+struct VoteLog {
+    bool voted;
+    bool vote;
+    string justification;
+}
 enum VoteType {
     ERC20New, ERC20Spend, MATICSpend, UpdateQuorum, UpdateFees, ContractCall
 }
@@ -69,14 +74,17 @@ contract OnChainGovernanceImpl is AccessControl {
     
     address public owner;
     address public nextOwner;
+
+    uint256 public constant MAXIMUM_FEE_PERCENTAGE = 100;
+    uint256 public constant MINIMUM_FEE_PERCENTAGE = 0;
     
     uint256 public constant MAXIMUM_QUORUM_PERCENTAGE = 100;
     uint256 public constant MINIMUM_QUORUM_PERCENTAGE = 1;
     uint256 public constant MINIMUM_QUORUM_VOTERS = 1;
-    uint256 public constant MINIMUM_TOKENS_TO_VOTE = .01 ether;
+    uint256 public constant MINIMUM_TOKENS_TO_PARTICIPATE = .01 ether;
 
-    uint256 public constant MINIMUM_MS_BETWEEN_VOTES_RAISED = 1; //60 * 30 * 1000; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
-    uint256 public constant MINIMUM_MS_BEFORE_VOTE_RESOLVED = 1; //60 * 1000; //(2 blocks / second) * (60 seconds / minute) * (1 minutes)
+    uint256 public constant MINIMUM_MS_BETWEEN_VOTES_RAISED = 60 * 30 * 1000; //(2 blocks / second) * (60 seconds / minute) * (30 minutes)
+    uint256 public constant MINIMUM_MS_BEFORE_VOTE_RESOLVED = 60 * 1000; //(2 blocks / second) * (60 seconds / minute) * (1 minutes)
 
     ERC20Snapshottable public votingToken;
 
@@ -86,14 +94,10 @@ contract OnChainGovernanceImpl is AccessControl {
     mapping(uint256 => Quorum) quorums;
 
     Fees public fee = Fees(.01 ether, 10, address(this));
-    uint256 public tokenPrice = 1 ether; //1 matic per token
 
     mapping(uint256 => VotingData) public voteContent;
 
-    mapping(address => mapping(uint256 => bool)) public voted;
-    mapping(address => mapping(uint256 => bool)) public voteLog;
-
-    mapping(address => mapping(uint256 => string)) public justifications;
+    mapping(address => mapping(uint256 => VoteLog)) public votelog;
 
     mapping(uint256 => uint256) public yay;
     mapping(uint256 => uint256) public yayCount;
@@ -112,8 +116,9 @@ contract OnChainGovernanceImpl is AccessControl {
     //pauser role state variables
     bool public paused;
     bool public buyingPaused;
+    bool public pausingEnabled;
 
-    constructor() {
+    constructor(address _votingToken) {
         owner = msg.sender;
         _setupRole(OWNER_ROLE, msg.sender);
         _setupRole(ADMIN_ROLE, msg.sender);
@@ -124,8 +129,8 @@ contract OnChainGovernanceImpl is AccessControl {
         _setRoleAdmin(ADMIN_ROLE, OWNER_ROLE);
         _setRoleAdmin(MEMBER_ROLE, OWNER_ROLE);
         _setRoleAdmin(PAUSER_ROLE, OWNER_ROLE);
-        votingToken = ERC20Snapshottable(address(0x40BF930A73D7220be6613B2520E79c56286dfa24));
-        enabledERC20Token[address(0x40BF930A73D7220be6613B2520E79c56286dfa24)] = true;
+        votingToken = ERC20Snapshottable(address(_votingToken));
+        enabledERC20Token[address(_votingToken)] = true;
     }
     
     event VoteRaised(VotingData data);
@@ -354,11 +359,11 @@ contract OnChainGovernanceImpl is AccessControl {
 
     function vote(uint256 id, bool _yay, string memory justification) public onlySender onlyRole(MEMBER_ROLE){
         uint256 balanceOf = votingToken.balanceOfAt(msg.sender, voteContent[id].snapshotId);
-        require(balanceOf >= MINIMUM_TOKENS_TO_VOTE, "Not enough of Voting token to vote. Need .01");
+        require(balanceOf >= MINIMUM_TOKENS_TO_PARTICIPATE, "Not enough of Voting token to vote. Need .01");
         require(voteRaised[id], "vote not yet raised!");
-        require(!voted[msg.sender][id], "Sender already voted");
-        require(voteDecided[id] == VoteResult.VoteOpen, "vote already decided!");
+        require(!votelog[msg.sender][id].voted, "Sender already voted");
         require(!paused, "Paused");
+        require(owner != address(this), "governance cannot vote")
         
         if (_yay) {
             yay[id] += balanceOf;
@@ -380,9 +385,9 @@ contract OnChainGovernanceImpl is AccessControl {
             emit Nay(voteContent[id]);
             voteDecided[id] = VoteResult.Discarded;
         }
-        voted[msg.sender][id] = true;
-        voteLog[msg.sender][id] = _yay;
-        justifications[msg.sender][id] = justification;
+        votelog[msg.sender][id].voted = true;
+        votelog[msg.sender][id].vote = _yay;
+        votelog[msg.sender][id].justification = justification;
         
         emit Voted(msg.sender, voteDecided[id], justification);
     }
@@ -415,8 +420,8 @@ contract OnChainGovernanceImpl is AccessControl {
             } else if (_data.voteType == VoteType.ContractCall) {
                 _execute(_data.targets, _data.values, _data.calldatas);
             }
-            voteResolved[id] = true;
             emit VoteResolved(msg.sender, id);
+            voteResolved[id] = true;
         }
     }       
     event ContractCallExecuted(bool success, bytes returndata);
@@ -433,16 +438,6 @@ contract OnChainGovernanceImpl is AccessControl {
         }
     }
 
-    event TokensPurchased(address _user, uint256 _amount);
-    function buyTokensWithMATIC(uint256 amount) public payable {
-        require(!paused, "Paused");
-        require(!buyingPaused, "Buying paused");
-        require(votingToken.balanceOf(address(this)) >= amount, "Contract has not enough tokens to sell");
-        require(msg.value == (amount * tokenPrice), "Not sending sufficient MATIC, or sending more MATIC than required");
-        
-        votingToken.transferFrom(address(this), msg.sender, amount);
-        emit TokensPurchased(msg.sender, amount);
-    }
     function validateQuorum(Quorum memory _quorum) internal pure {
         require(_quorum.quorumPercentage <= MAXIMUM_QUORUM_PERCENTAGE
             && _quorum.quorumPercentage >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
@@ -451,11 +446,11 @@ contract OnChainGovernanceImpl is AccessControl {
     }
 
     function validateFees(Fees memory _fees) internal pure {
-        require(_fees.percent <= MAXIMUM_QUORUM_PERCENTAGE
-            && _fees.percent >= MINIMUM_QUORUM_PERCENTAGE, "Quorum Percentage out of 0-100");
+        require(_fees.percent <= MAXIMUM_FEE_PERCENTAGE
+            && _fees.percent >= MINIMUM_FEE_PERCENTAGE, "Quorum Percentage out of 0-100");
     }
     event Veto(uint256 id);
-    event ForcePass(uint256 id);
+    event ForcePass(uint256 id);  
     
     function ownerVetoProposal(uint256 proposalIndex) public onlyRole(OWNER_ROLE) {
         require(voteRaised[proposalIndex], "vote not raised!");
@@ -488,30 +483,39 @@ contract OnChainGovernanceImpl is AccessControl {
     function unpauseBuying() public onlyRole(PAUSER_ROLE) {
         buyingPaused = false;
     }
+    
+    event MemberAdded(address _user, address _admin);
+    event MemberRevoked(address _user, address _admin);
     function revokeMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
         require(!paused, "Paused");
         revokeRole(MEMBER_ROLE, _newRaiser);
+        emit MemberRevoked(_newRaiser, msg.sender);
     }
     
     function addMember(address _newRaiser) public onlyRole(ADMIN_ROLE) onlySender {
         require(!paused, "Paused");
         _setupRole(MEMBER_ROLE, _newRaiser);
+        emit MemberAdded(_newRaiser, msg.sender);
     }
     
     function promoteNextOwner(address _nextOwner) public onlyRole(OWNER_ROLE) {
         require(_nextOwner != owner, "next owner == owner");
         require(_nextOwner != ZEROES, "Must promote valid governance");
+        require(owner != address(this), "when self governed, ownership changing is disabled");
+
         nextOwner = _nextOwner;   
     }
-    
+    event OwnershipTransferred(address _old, address _new);
     function acceptOwnership() public onlyRole(MEMBER_ROLE) {
         require(msg.sender != owner, "Owner cannot take own ownership");
         require(nextOwner == msg.sender, "Caller not nominated");
         
         _setupRole(OWNER_ROLE, msg.sender);
         revokeRole(OWNER_ROLE, owner);
+        
+        //emit event before updating state vars
+        emit OwnershipTransferred(owner, msg.sender);
         owner = msg.sender;
-
         nextOwner = ZEROES;
     }
     
